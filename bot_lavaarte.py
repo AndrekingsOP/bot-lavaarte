@@ -20,7 +20,6 @@ URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxqnfe5kd_b0gB50r0IKw
 bot = telebot.TeleBot(TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# MODELOS ACTIVOS CON ROTACIÓN TRANSPARENTE
 MODELOS_ROTACION = [
     'gemini-3.6-flash',
     'gemini-3.5-flash',
@@ -34,9 +33,6 @@ cola_fotos = {}
 timers = {}
 lock = threading.Lock()
 
-# ==========================================
-# MAPA MAESTRO DE HOJAS Y SERVICIOS
-# ==========================================
 ARBOL_SERVICIOS = {
     # RUTA ORIENTE
     "wyndham_huespedes": {"ruta": "Oriente", "hotel": "Wyndham", "servicio": "Huéspedes", "hoja": "WYNDHAM_HUESPEDES_DATOS", "tipo": "HUESPEDES", "base_defecto": "WYNDHAM HUÉSPEDES"},
@@ -169,9 +165,6 @@ CATALOGO_GLOBAL = """
 20|Tennis / Zapato|Lavado|18170
 """
 
-# ==========================================
-# MOTOR RESILIENTE CON ROTACIÓN ANTI-429 & ANTI-503
-# ==========================================
 def llamar_gemini_rotativo(contents):
     ultimo_error = None
     for modelo in MODELOS_ROTACION:
@@ -300,9 +293,6 @@ def parsear_correccion_ia(texto_usuario):
     resp = llamar_gemini_rotativo([prompt])
     return json.loads(resp.strip().replace("```json", "").replace("```", "").strip())
 
-# ==========================================
-# ENVÍO SEGURO CON SEGMENTACIÓN (ANTI-400)
-# ==========================================
 def enviar_mensaje_segmentado(chat_id, texto, reply_markup=None):
     MAX_CHARS = 3800
     if len(texto) <= MAX_CHARS:
@@ -380,6 +370,15 @@ def menu_recibir_entregar(hotel_key):
     markup.add(InlineKeyboardButton("⬅️ Cambiar Hotel", callback_data="menu_inicio"))
     return markup
 
+def menu_sub_entrega(hotel_key):
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("📦 1. Cargar Despacho (En Planta)", callback_data="despacho_planta_" + str(hotel_key)),
+        InlineKeyboardButton("🤝 2. Confirmar Entrega en Hotel (Conductor)", callback_data="confirmar_hotel_" + str(hotel_key)),
+        InlineKeyboardButton("⬅️ Volver", callback_data="sel_" + str(hotel_key))
+    )
+    return markup
+
 def menu_post_guardado():
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(
@@ -398,10 +397,15 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
     mov = config_sesion.get('movimiento', '')
     es_eficacia = (config_sesion.get('key') == "eficacia")
     
+    r_lavaarte = config_sesion.get('resp_lavaarte', 'Conductor Lavaarte')
+    r_hotel = config_sesion.get('resp_hotel', 'Recepción / Ama de llaves')
+    
     resumen = "🏨 *HOTEL / SERVICIO:* " + hotel_txt
     if mov:
         resumen += " (*" + str(mov) + "*)"
     resumen += "\n📅 *FECHA:* " + str(fecha_reg) + "\n"
+    resumen += "👤 *Responsable Lavaarte:* `" + str(r_lavaarte) + "`\n"
+    resumen += "🏨 *Responsable Hotel:* `" + str(r_hotel) + "`\n"
     
     if es_eficacia or tipo_op == "MATRIZ_FILAS_CLIENTE":
         total_p = sum(item.get('cantidad', 0) for item in filas)
@@ -448,7 +452,7 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
     return resumen
 
 # ==========================================
-# MANEJADORES DE EVENTOS TELEGRAM
+# MANEJADORES TELEGRAM
 # ==========================================
 @bot.message_handler(commands=['start', 'menu'])
 def cmd_start(m):
@@ -480,11 +484,10 @@ def manejar_menu_principal(call):
         try:
             resp_o = requests.post(URL_APPS_SCRIPT, data=json.dumps({"accion": "LISTAR_HOJAS", "ruta": "Oriente"}), headers={'Content-Type': 'application/json'}, timeout=20).json()
             resp_n = requests.post(URL_APPS_SCRIPT, data=json.dumps({"accion": "LISTAR_HOJAS", "ruta": "Norte"}), headers={'Content-Type': 'application/json'}, timeout=20).json()
-            
             txt_diag = "📋 *RECONOCIMIENTO DE HOJAS CONECTADAS:*\n\n"
             txt_diag += "🧭 *Libro Oriente:*\n`" + ", ".join(resp_o.get("hojas", [])) + "`\n\n"
             txt_diag += "🧭 *Libro Norte:*\n`" + ", ".join(resp_n.get("hojas", [])) + "`\n\n"
-            txt_diag += "✅ *El localizador tolerante está activo para guardar en cualquiera de ellas sin error.*"
+            txt_diag += "✅ *El localizador tolerante y auto-creador de TIEMPOS / RECEPCION_ENTREGA está activo.*"
             enviar_mensaje_segmentado(chat_id, txt_diag)
         except Exception as e:
             bot.send_message(chat_id, "❌ Error consultando hojas: " + str(e))
@@ -501,44 +504,75 @@ def seleccionar_hotel(call):
     sesiones[call.message.chat.id]["key"] = key
     sesiones[call.message.chat.id]["filas"] = []
     
-    if key == "eficacia":
-        sesiones[call.message.chat.id]["movimiento"] = "RECEPCIÓN"
-        bot.edit_message_text(
-            "🏭 *EFICACIA DOTACIONES*\n\n📸 *Puedes enviar:* Foto(s) de la planilla con bloques por empresa (MONDELEZ, ALPINA, ÉXITO, PAYJOY...), texto o Nota de Voz.",
-            call.message.chat.id, call.message.message_id, parse_mode='Markdown'
-        )
-    elif cfg["tipo"] == "LENCERIA_MATRIZ" or "uniforme" in key or "empleado" in key:
-        bot.edit_message_text(
-            "🏨 Has seleccionado: *" + str(cfg['hotel']) + " (" + str(cfg['servicio']) + ")*\n\n¿Qué movimiento deseas registrar?",
-            call.message.chat.id, call.message.message_id,
-            reply_markup=menu_recibir_entregar(key),
-            parse_mode='Markdown'
-        )
-    else:
-        aviso_filtro = " (solo se registrarán habitaciones de huéspedes)" if key == "wyndham_huespedes" else ""
-        bot.edit_message_text(
-            "✅ Hotel activo: *" + str(cfg['hotel']) + " - " + str(cfg['servicio']) + "*" + aviso_filtro + "\n\n📸 *Puedes enviar:* Foto(s), texto o Nota de Voz.",
-            call.message.chat.id, call.message.message_id,
-            parse_mode='Markdown'
-        )
+    bot.edit_message_text(
+        "🏨 Operación: *" + str(cfg['hotel']) + " (" + str(cfg['servicio']) + ")*\n\n¿Qué movimiento deseas registrar?",
+        call.message.chat.id, call.message.message_id,
+        reply_markup=menu_recibir_entregar(key),
+        parse_mode='Markdown'
+    )
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('mov_'))
-def seleccionar_movimiento(call):
-    partes = call.data.split('_')
-    tipo_mov = "RECEPCIÓN" if partes[1] == "recibir" else "ENTREGA"
-    key = "_".join(partes[2:])
-    
+# --- FLUJO ENTREGA ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith('mov_entregar_'))
+def manejar_opciones_entrega(call):
+    key = call.data.replace('mov_entregar_', '')
     cfg = ARBOL_SERVICIOS.get(key)
     sesiones[call.message.chat.id] = dict(cfg)
     sesiones[call.message.chat.id]["key"] = key
-    sesiones[call.message.chat.id]["movimiento"] = tipo_mov
-    sesiones[call.message.chat.id]["filas"] = []
+    sesiones[call.message.chat.id]["movimiento"] = "ENTREGA"
     
     bot.edit_message_text(
-        "✅ Operación: *" + str(cfg['hotel']) + " - " + str(cfg['servicio']) + "*\n📋 Tipo: *" + str(tipo_mov) + "*\n\n📸 *Puedes enviar:* Foto(s), texto o Nota de Voz.",
+        "📤 *ENTREGA DE ROPA - " + str(cfg['hotel']) + "*\n\nSelecciona el momento de la entrega:",
         call.message.chat.id, call.message.message_id,
+        reply_markup=menu_sub_entrega(key),
         parse_mode='Markdown'
     )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('despacho_planta_'))
+def iniciar_despacho_planta(call):
+    chat_id = call.message.chat.id
+    sesiones[chat_id]["sub_op"] = "DESPACHO_PLANTA"
+    sesiones[chat_id]["paso_custodia"] = "RESP_LAVAARTE_DESPACHO"
+    bot.send_message(chat_id, "📦 *DESPACHO EN PLANTA*\n\nEscribe el nombre de quién despacha la ropa en planta:", parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('confirmar_hotel_'))
+def iniciar_confirmacion_hotel(call):
+    chat_id = call.message.chat.id
+    cfg = sesiones.get(chat_id, {})
+    hotel_nom = cfg.get("hotel", "Hotel")
+    
+    bot.send_message(chat_id, "🔎 Buscando despacho pendiente para *" + str(hotel_nom) + "*...", parse_mode='Markdown')
+    try:
+        payload = {"accion": "CONSULTAR_DESPACHO", "ruta": cfg.get("ruta", "Oriente"), "hotel": hotel_nom}
+        resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=30).json()
+        
+        if resp.get("status") == "SUCCESS":
+            desp = resp.get("despacho", {})
+            sesiones[chat_id]["despacho_pendiente"] = desp
+            sesiones[chat_id]["paso_custodia"] = "CONFIRMAR_QUIEN_RECIBE_HOTEL"
+            
+            txt_info = "📋 *DESPACHO ENCONTRADO EN SISTEMA:*\n\n"
+            txt_info += "📅 *Fecha Despacho:* " + str(desp.get("fecha")) + " (" + str(desp.get("hora")) + ")\n"
+            txt_info += "👤 *Despachado en Planta por:* " + str(desp.get("despachado_por")) + "\n"
+            txt_info += "📊 *Total Prendas a Entregar:* *" + str(desp.get("total_prendas")) + "*\n\n"
+            txt_info += "✍️ *Por favor escribe el nombre de la persona que recibe en el hotel (Nombre y cargo):*"
+            bot.send_message(chat_id, txt_info, parse_mode='Markdown')
+        else:
+            bot.send_message(chat_id, "⚠️ No hay un despacho pendiente registrado en planta para *" + str(hotel_nom) + "*.\n\nPuedes cargarlo seleccionando la opción 1 (Cargar Despacho en Planta).", parse_mode='Markdown')
+    except Exception as e:
+        bot.send_message(chat_id, "❌ Error consultando: " + str(e))
+
+# --- FLUJO RECEPCIÓN ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith('mov_recibir_'))
+def iniciar_recepcion(call):
+    chat_id = call.message.chat.id
+    key = call.data.replace('mov_recibir_', '')
+    cfg = ARBOL_SERVICIOS.get(key)
+    sesiones[chat_id] = dict(cfg)
+    sesiones[chat_id]["key"] = key
+    sesiones[chat_id]["movimiento"] = "RECEPCIÓN"
+    sesiones[chat_id]["paso_custodia"] = "REC_QUIEN_ENTREGA_HOTEL"
+    
+    bot.send_message(chat_id, "📥 *RECEPCIÓN EN HOTEL - " + str(cfg['hotel']) + "*\n\n1️⃣ ¿Quién entrega la ropa por parte del hotel? (Escribe nombre y cargo):", parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data in ['accion_seguir', 'menu_inicio'])
 def manejar_post_guardado(call):
@@ -621,7 +655,7 @@ def confirmar_guardado(m):
         filas = cfg["filas"]
         tipo_op = filas[0].get("tipo_operacion_detectada", cfg.get("tipo", "HUESPEDES"))
         
-        bot.reply_to(m, "⏳ Guardando en *" + str(cfg['hoja']) + "*...", parse_mode='Markdown')
+        bot.reply_to(m, "⏳ Guardando datos y registrando custodia en *" + str(cfg['hoja']) + "*...", parse_mode='Markdown')
         try:
             dia_actual = datetime.datetime.now().day
             if filas and filas[0].get('fecha'):
@@ -636,6 +670,8 @@ def confirmar_guardado(m):
                 "destino": cfg["hoja"],
                 "tipo_operacion": tipo_op,
                 "movimiento": cfg.get("movimiento", "RECEPCIÓN"),
+                "responsable_lavaarte": cfg.get("resp_lavaarte", "Conductor Lavaarte"),
+                "responsable_hotel": cfg.get("resp_hotel", "Recepción / Ama de llaves"),
                 "dia": dia_actual,
                 "filas": filas
             }
@@ -645,7 +681,7 @@ def confirmar_guardado(m):
             
             if resp.status_code == 200 and data_resp.get("status") == "SUCCESS":
                 hoja_dest = data_resp.get("hoja_guardada", cfg['hotel'])
-                bot.reply_to(m, "✅ *¡Datos guardados con éxito en " + str(hoja_dest) + "!*", parse_mode='Markdown')
+                bot.reply_to(m, "✅ *¡Datos guardados con éxito!*\n📋 Registrado en: `" + str(hoja_dest) + "`\n⏱️ Auditoría generada en `TIEMPOS` y `RECEPCION_ENTREGA`.", parse_mode='Markdown')
                 sesiones[chat_id]["filas"] = []
                 bot.send_message(chat_id, "¿Qué deseas hacer a continuación?", reply_markup=menu_post_guardado())
             else:
@@ -666,9 +702,66 @@ def cancelar_guardado(m):
 def procesar_texto_general(m):
     chat_id = m.chat.id
     ses = sesiones.get(chat_id, {})
-    modo = ses.get("modo")
+    paso = ses.get("paso_custodia")
     
-    # 1. Modo Consulta con IA
+    # -------------------------------------------------------------------------
+    # FLUJOS INTERACTIVOS DE CUSTODIA (QUIÉN ENTREGA Y QUIÉN RECIBE)
+    # -------------------------------------------------------------------------
+    if paso == "RESP_LAVAARTE_DESPACHO":
+        ses["resp_lavaarte"] = m.text.strip()
+        ses["resp_hotel"] = "Por entregar en hotel"
+        ses["paso_custodia"] = None
+        bot.reply_to(m, f"✅ Registrado despachador: *{m.text.strip()}*\n\n📸 Ahora puedes enviar las fotos, audio o texto de las prendas despachadas:", parse_mode='Markdown')
+        return
+
+    if paso == "CONFIRMAR_QUIEN_RECIBE_HOTEL":
+        quien_recibe = m.text.strip()
+        desp = ses.get("despacho_pendiente", {})
+        bot.reply_to(m, "⏳ Confirmando entrega en Google Sheets...")
+        try:
+            payload = {
+                "accion": "CONFIRMAR_ENTREGA_HOTEL",
+                "ruta": ses.get("ruta", "Oriente"),
+                "hotel": ses.get("hotel", "Hotel"),
+                "fila_despacho": desp.get("fila"),
+                "total_prendas": desp.get("total_prendas", 0),
+                "responsable_lavaarte": desp.get("despachado_por", "Conductor"),
+                "responsable_hotel": quien_recibe
+            }
+            resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=40).json()
+            if resp.get("status") == "SUCCESS":
+                txt_ok = f"🤝 *¡ENTREGA CONFIRMADA EXITOSAMENTE!*\n\n"
+                txt_ok += f"🏨 *Hotel:* {ses.get('hotel')}\n"
+                txt_ok += f"👤 *Entregado por:* {desp.get('despachado_por')}\n"
+                txt_ok += f"✍️ *Recibido por:* {quien_recibe}\n"
+                txt_ok += f"📊 *Prendas:* {desp.get('total_prendas')}\n"
+                txt_ok += f"⏱️ *Hora sellada:* {datetime.datetime.now().strftime('%I:%M %p')}\n\n"
+                txt_ok += "Guardado en `RECEPCION_ENTREGA` y `TIEMPOS`."
+                bot.send_message(chat_id, txt_ok, parse_mode='Markdown')
+                sesiones[chat_id] = {}
+                bot.send_message(chat_id, "Selecciona una nueva opción:", reply_markup=menu_principal())
+            else:
+                bot.reply_to(m, "⚠️ Error: " + str(resp.get("mensaje")))
+        except Exception as e:
+            bot.reply_to(m, "❌ Error sellando entrega: " + str(e))
+        return
+
+    if paso == "REC_QUIEN_ENTREGA_HOTEL":
+        ses["resp_hotel"] = m.text.strip()
+        ses["paso_custodia"] = "REC_QUIEN_RECIBE_LAVAARTE"
+        bot.reply_to(m, f"✅ Entrega por hotel: *{m.text.strip()}*\n\n2️⃣ ¿Quién recibe por parte de Lavaarte? (Nombre del conductor):", parse_mode='Markdown')
+        return
+
+    if paso == "REC_QUIEN_RECIBE_LAVAARTE":
+        ses["resp_lavaarte"] = m.text.strip()
+        ses["paso_custodia"] = None
+        bot.reply_to(m, f"✅ Recibe por Lavaarte: *{m.text.strip()}*\n\n📸 *¡Listo!* Ya puedes enviar las fotos de las planillas, notas de voz o texto de la ropa recibida:", parse_mode='Markdown')
+        return
+
+    # -------------------------------------------------------------------------
+    # MODOS TRADICIONALES
+    # -------------------------------------------------------------------------
+    modo = ses.get("modo")
     if modo == "CONSULTA":
         bot.reply_to(m, "🔎 Consultando las hojas de cálculo...")
         try:
@@ -688,7 +781,6 @@ def procesar_texto_general(m):
             bot.reply_to(m, "❌ Error procesando consulta: " + str(e))
         return
 
-    # 2. Modo Corrección de Registros
     if modo == "CORREGIR":
         bot.reply_to(m, "⚙️ Analizando y aplicando corrección...")
         try:
@@ -714,7 +806,6 @@ def procesar_texto_general(m):
             bot.reply_to(m, "❌ Error aplicando corrección: " + str(e))
         return
 
-    # 3. Modo Ajuste de Lista Pendiente de Guardar
     if ses.get("filas"):
         bot.reply_to(m, "⚙️ Aplicando ajustes a la lista...")
         try:
@@ -727,7 +818,6 @@ def procesar_texto_general(m):
             bot.reply_to(m, "❌ Error aplicando cambio: " + str(e))
         return
 
-    # 4. Modo Entrada de Texto Nueva
     if not ses.get("hotel"):
         sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
         
@@ -744,5 +834,5 @@ def procesar_texto_general(m):
 # ==========================================
 # INICIO DEL SERVICIO
 # ==========================================
-print("🚀 Bot Maestro Lavaarte en línea")
+print("🚀 Bot Maestro Lavaarte en línea ")
 bot.infinity_polling()
