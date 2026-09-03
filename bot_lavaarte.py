@@ -6,13 +6,11 @@ import json
 import io
 import time
 import threading
+import base64
 from PIL import Image
 from google import genai
 from google.genai import types
 
-# ==========================================
-# CONFIGURACIÓN Y CREDENCIALES
-# ==========================================
 TOKEN = '8816786492:AAEb6VgZzP07JJ9MegbVjiItuS-oopL5728'
 GEMINI_API_KEY = 'AQ.Ab8RN6KHh9xczXiYb-Bm2DSL1Q8zsTyd695lbn3CF74Qc4OzGg'
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxqnfe5kd_b0gB50r0IKw69pkRdsYq4vEHLIpwpRZpDYeTMq5TvWVCnsstm7Tj2W0we/exec'
@@ -214,7 +212,7 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     3. CASO EFICACIA (AGRUPACIÓN POR EMPRESA):
        - ¿Es Eficacia?: {es_eficacia}
        - Si es Eficacia, 'habitacion' = NOMBRE EXACTO DE LA EMPRESA (ej: 'MONDELEZ', 'ALPINA', 'ÉXITO', 'PAYJOY', 'TIGO').
-       - Prenda = Nombre de la prenda (ej: 'Pantalón', 'Chaqueta', 'Camiseta', 'Suéter', 'Chaleco', 'Delantal', 'Camisa', 'Cinturón', 'Impermeable', 'Guantes', 'Gorra', 'Morral').
+       - Prenda = Nombre de la prenda.
 
     4. REMISIÓN Y HABITACIÓN:
        - 'remision': Número de remisión o consecutivo (si no hay, coloca el número de habitación).
@@ -266,32 +264,53 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
     return json.loads(texto)
 
-def interpretar_consulta_ia(pregunta, matriz_datos, nombre_hoja):
+def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO"):
+    fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
     prompt = f"""
-    Eres el auditor y asistente financiero de Lavaarte Lavandería SAS.
-    Pregunta: "{pregunta}"
+    Eres el asistente contable financiero de Lavaarte Lavandería SAS.
+    Analiza el comprobante, factura, recibo, audio o texto financiero recibido.
     
-    Datos de la hoja '{nombre_hoja}':
-    {json.dumps(matriz_datos[:40], ensure_ascii=False)}
+    Tipo de movimiento predeterminado: {tipo_forzado} (EGRESO = Gasto/Compra, INGRESO = Cobro/Entrada de dinero).
     
-    Responde en Markdown claro para Telegram.
+    Categorías disponibles para EGRESO:
+    - Combustible (Gasolina, ACPM)
+    - Insumos Químicos (Detergentes, suavizantes, cloro, desmanchadores)
+    - Mantenimiento (Mecánica furgón, llantas, cambio aceite, repuestos lavadoras/secadoras)
+    - Servicios Públicos (Enel, Gas Natural, Acueducto)
+    - Nómina / Viáticos (Almuerzos, peajes, pagos a colaboradores)
+    - Papelería (Planillas, ganchos, bolsas plásticas)
+    - Arriendo (Local, planta)
+    - Otros Gastos
+    
+    Categorías disponibles para INGRESO:
+    - Facturación Hoteles
+    - Servicios Mostrador
+    - Dotaciones Corporativas
+    - Otros Ingresos
+    
+    Devuelve EXCLUSIVAMENTE un JSON con:
+    {{
+      "fecha": "{fecha_hoy}",
+      "tipo": "{tipo_forzado}",
+      "categoria": "Categoría exacta",
+      "concepto": "Descripción clara del gasto o ingreso",
+      "tercero": "Proveedor o Cliente (ej: Estación Terpel, Químicos del Valle, Hotel Wyndham)",
+      "metodo_pago": "Efectivo / Transferencia Bancolombia / Nequi / Daviplata",
+      "responsable": "Nombre de quién realizó el movimiento o conductor",
+      "valor": 120000,
+      "estado": "PAGADO / CONCILIADO",
+      "observaciones": "Detalle extra si aplica"
+    }}
     """
-    return llamar_gemini_rotativo([prompt])
-
-def parsear_correccion_ia(texto_usuario):
-    prompt = f"""
-    Eres el asistente de Lavaarte. Analiza la corrección:
-    Texto: "{texto_usuario}"
-    
-    Devuelve un JSON con:
-    - hotel_clave: una de {list(ARBOL_SERVICIOS.keys())}
-    - identificador: número de habitación o nombre de empresa
-    - dia: número de día si es lencería, o null
-    - prenda: nombre de la prenda
-    - nuevo_valor: número entero
-    """
-    resp = llamar_gemini_rotativo([prompt])
-    return json.loads(resp.strip().replace("```json", "").replace("```", "").strip())
+    contents = [prompt]
+    if isinstance(contenido_multimodal, list):
+        contents.extend(contenido_multimodal)
+    elif contenido_multimodal is not None:
+        contents.append(contenido_multimodal)
+        
+    texto_raw = llamar_gemini_rotativo(contents)
+    texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
+    return json.loads(texto)
 
 def enviar_mensaje_segmentado(chat_id, texto, reply_markup=None):
     MAX_CHARS = 3800
@@ -324,9 +343,21 @@ def menu_principal():
         InlineKeyboardButton("🧭 Ruta Oriente", callback_data="ruta_oriente"),
         InlineKeyboardButton("🧭 Ruta Norte", callback_data="ruta_norte"),
         InlineKeyboardButton("🔍 Auditoría / Consultas IA", callback_data="modo_consulta"),
-        InlineKeyboardButton("✏️ Corregir Registro", callback_data="modo_corregir"),
-        InlineKeyboardButton("📋 Verificar Hojas en Sheets", callback_data="verificar_hojas")
+        InlineKeyboardButton("✏️ Corregir Registro", callback_data="modo_corregir")
     )
+    # BOTÓN ANCHO INFERIOR PARA CONTROL FINANCIERO
+    markup.add(
+        InlineKeyboardButton("💸 Control Financiero (Gastos / Ingresos)", callback_data="menu_financiero")
+    )
+    return markup
+
+def menu_financiero():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("🔴 Registrar Gasto / Egreso", callback_data="fin_egreso"),
+        InlineKeyboardButton("🟢 Registrar Ingreso", callback_data="fin_ingreso")
+    )
+    markup.add(InlineKeyboardButton("⬅️ Volver al Menú Principal", callback_data="menu_inicio"))
     return markup
 
 def menu_hoteles_oriente():
@@ -463,7 +494,7 @@ def cmd_start(m):
 def saludo_texto(m):
     cmd_start(m)
 
-@bot.callback_query_handler(func=lambda call: call.data in ['menu_inicio', 'ruta_oriente', 'ruta_norte', 'modo_consulta', 'modo_corregir', 'verificar_hojas'])
+@bot.callback_query_handler(func=lambda call: call.data in ['menu_inicio', 'ruta_oriente', 'ruta_norte', 'modo_consulta', 'modo_corregir', 'menu_financiero'])
 def manejar_menu_principal(call):
     chat_id = call.message.chat.id
     if call.data == 'menu_inicio':
@@ -479,18 +510,28 @@ def manejar_menu_principal(call):
     elif call.data == 'modo_corregir':
         sesiones[chat_id] = {"modo": "CORREGIR"}
         bot.edit_message_text("✏️ *MODO CORRECCIÓN DE REGISTRO*\n\nEscribe el ajuste que deseas realizar de forma explícita.", chat_id, call.message.message_id, parse_mode='Markdown')
-    elif call.data == 'verificar_hojas':
-        bot.send_message(chat_id, "🔎 Consultando hojas existentes en Google Sheets...")
-        try:
-            resp_o = requests.post(URL_APPS_SCRIPT, data=json.dumps({"accion": "LISTAR_HOJAS", "ruta": "Oriente"}), headers={'Content-Type': 'application/json'}, timeout=20).json()
-            resp_n = requests.post(URL_APPS_SCRIPT, data=json.dumps({"accion": "LISTAR_HOJAS", "ruta": "Norte"}), headers={'Content-Type': 'application/json'}, timeout=20).json()
-            txt_diag = "📋 *RECONOCIMIENTO DE HOJAS CONECTADAS:*\n\n"
-            txt_diag += "🧭 *Libro Oriente:*\n`" + ", ".join(resp_o.get("hojas", [])) + "`\n\n"
-            txt_diag += "🧭 *Libro Norte:*\n`" + ", ".join(resp_n.get("hojas", [])) + "`\n\n"
-            txt_diag += "✅ *El localizador tolerante y auto-creador de TIEMPOS / RECEPCION_ENTREGA está activo.*"
-            enviar_mensaje_segmentado(chat_id, txt_diag)
-        except Exception as e:
-            bot.send_message(chat_id, "❌ Error consultando hojas: " + str(e))
+    elif call.data == 'menu_financiero':
+        sesiones[chat_id] = {"modulo": "FINANCIERO"}
+        bot.edit_message_text("💸 *MÓDULO DE CONTROL FINANCIERO LAVAARTE*\n\n¿Qué tipo de movimiento deseas registrar?", chat_id, call.message.message_id, reply_markup=menu_financiero(), parse_mode='Markdown')
+
+# --- SUBMÓDULO FINANCIERO ---
+@bot.callback_query_handler(func=lambda call: call.data in ['fin_egreso', 'fin_ingreso'])
+def seleccionar_tipo_financiero(call):
+    chat_id = call.message.chat.id
+    es_egreso = (call.data == 'fin_egreso')
+    tipo_str = "EGRESO" if es_egreso else "INGRESO"
+    emoji = "🔴" if es_egreso else "🟢"
+    
+    sesiones[chat_id] = {
+        "modulo": "FINANCIERO",
+        "tipo_fin": tipo_str
+    }
+    
+    txt = f"{emoji} *REGISTRAR {tipo_str}*\n\n"
+    txt += "📸 *Puedes enviar:* Foto del recibo/factura/ticket (se guardará en Google Drive como soporte).\n"
+    txt += "🎙️ *O enviar:* Nota de voz (ej: _'Pagué 90 mil de gasolina en Terpel con Nequi'_).\n"
+    txt += "✍️ *O escribirlo:* En un mensaje de texto."
+    bot.edit_message_text(txt, chat_id, call.message.message_id, parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('sel_'))
 def seleccionar_hotel(call):
@@ -593,8 +634,40 @@ def procesar_lote_fotos(chat_id):
             del timers[chat_id]
             
     cfg = sesiones.get(chat_id, ARBOL_SERVICIOS["wyndham_huespedes"])
-    bot.send_message(chat_id, "🔍 Procesando " + str(len(imgs)) + " foto(s)...", parse_mode='Markdown')
     
+    # 1. Caso Financiero con Foto
+    if cfg.get("modulo") == "FINANCIERO":
+        bot.send_message(chat_id, "🧾 Analizando comprobante financiero con IA...", parse_mode='Markdown')
+        try:
+            img_obj = imgs[0]
+            # Convertir a base64 para subir a Drive
+            buffer_io = io.BytesIO()
+            img_obj.save(buffer_io, format="JPEG", quality=85)
+            b64_str = base64.b64encode(buffer_io.getvalue()).decode('utf-8')
+            
+            tipo_mov = cfg.get("tipo_fin", "EGRESO")
+            datos_fin = analizar_financiero_ia(img_obj, tipo_mov)
+            datos_fin["foto_base64"] = b64_str
+            sesiones[chat_id]["movimiento_fin_pendiente"] = datos_fin
+            
+            val_fmt = f"{datos_fin.get('valor', 0):,.2f}"
+            resumen_fin = f"📊 *CONFIRMACIÓN DE {tipo_mov}:*\n\n"
+            resumen_fin += f"📅 *Fecha:* `{datos_fin.get('fecha')}`\n"
+            resumen_fin += f"🏷️ *Categoría:* *{datos_fin.get('categoria')}*\n"
+            resumen_fin += f"📝 *Concepto:* {datos_fin.get('concepto')}\n"
+            resumen_fin += f"🏢 *Tercero / Proveedor:* {datos_fin.get('tercero')}\n"
+            resumen_fin += f"💳 *Método de Pago:* {datos_fin.get('metodo_pago')}\n"
+            resumen_fin += f"👤 *Responsable:* {datos_fin.get('responsable')}\n"
+            resumen_fin += f"💰 *Valor:* *${val_fmt}*\n"
+            resumen_fin += f"📸 *Evidencia:* Se guardará copia en Google Drive.\n\n"
+            resumen_fin += "💬 Escribe *SI* para registrar en Sheets o *NO* para cancelar."
+            bot.send_message(chat_id, resumen_fin, parse_mode='Markdown')
+        except Exception as e:
+            bot.send_message(chat_id, "❌ Error analizando comprobante: " + str(e))
+        return
+
+    # 2. Caso Operación Hotel
+    bot.send_message(chat_id, "🔍 Procesando " + str(len(imgs)) + " foto(s)...", parse_mode='Markdown')
     try:
         filas = analizar_con_ia(imgs, cfg)
         sesiones[chat_id]["filas"] = filas
@@ -607,7 +680,7 @@ def procesar_lote_fotos(chat_id):
 @bot.message_handler(content_types=['photo'])
 def recibir_fotos(message):
     chat_id = message.chat.id
-    if chat_id not in sesiones or not sesiones[chat_id].get("hotel"):
+    if chat_id not in sesiones or not sesiones[chat_id].get("hotel") and sesiones[chat_id].get("modulo") != "FINANCIERO":
         sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
         
     file_info = bot.get_file(message.photo[-1].file_id)
@@ -627,7 +700,7 @@ def recibir_fotos(message):
 @bot.message_handler(content_types=['voice', 'audio'])
 def recibir_audio(message):
     chat_id = message.chat.id
-    if chat_id not in sesiones or not sesiones[chat_id].get("hotel"):
+    if chat_id not in sesiones or not sesiones[chat_id].get("hotel") and sesiones[chat_id].get("modulo") != "FINANCIERO":
         sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
         
     cfg = sesiones[chat_id]
@@ -637,10 +710,26 @@ def recibir_audio(message):
         file_id = message.voice.file_id if message.voice else message.audio.file_id
         file_info = bot.get_file(file_id)
         audio_bytes = bot.download_file(file_info.file_path)
-        
         audio_part = types.Part.from_bytes(data=audio_bytes, mime_type="audio/ogg")
-        filas = analizar_con_ia([audio_part], cfg)
         
+        if cfg.get("modulo") == "FINANCIERO":
+            tipo_mov = cfg.get("tipo_fin", "EGRESO")
+            datos_fin = analizar_financiero_ia(audio_part, tipo_mov)
+            sesiones[chat_id]["movimiento_fin_pendiente"] = datos_fin
+            val_fmt = f"{datos_fin.get('valor', 0):,.2f}"
+            resumen_fin = f"📊 *CONFIRMACIÓN DE {tipo_mov}:*\n\n"
+            resumen_fin += f"📅 *Fecha:* `{datos_fin.get('fecha')}`\n"
+            resumen_fin += f"🏷️ *Categoría:* *{datos_fin.get('categoria')}*\n"
+            resumen_fin += f"📝 *Concepto:* {datos_fin.get('concepto')}\n"
+            resumen_fin += f"🏢 *Tercero / Proveedor:* {datos_fin.get('tercero')}\n"
+            resumen_fin += f"💳 *Método de Pago:* {datos_fin.get('metodo_pago')}\n"
+            resumen_fin += f"👤 *Responsable:* {datos_fin.get('responsable')}\n"
+            resumen_fin += f"💰 *Valor:* *${val_fmt}*\n\n"
+            resumen_fin += "💬 Escribe *SI* para registrar en Sheets o *NO* para cancelar."
+            bot.send_message(chat_id, resumen_fin, parse_mode='Markdown')
+            return
+
+        filas = analizar_con_ia([audio_part], cfg)
         sesiones[chat_id]["filas"] = filas
         resumen_txt = generar_resumen(filas, cfg, 1)
         enviar_mensaje_segmentado(chat_id, resumen_txt)
@@ -650,8 +739,35 @@ def recibir_audio(message):
 @bot.message_handler(func=lambda m: m.text and m.text.strip().upper() in ['SI', 'SÍ'])
 def confirmar_guardado(m):
     chat_id = m.chat.id
-    if chat_id in sesiones and sesiones[chat_id].get("filas"):
-        cfg = sesiones[chat_id]
+    ses = sesiones.get(chat_id, {})
+    
+    # 1. Guardar Movimiento Financiero
+    if ses.get("movimiento_fin_pendiente"):
+        m_fin = ses["movimiento_fin_pendiente"]
+        bot.reply_to(m, "⏳ Guardando en el libro contable...", parse_mode='Markdown')
+        try:
+            payload = {
+                "accion": "REGISTRAR_FINANCIERO",
+                "movimiento_financiero": m_fin
+            }
+            resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=45).json()
+            if resp.get("status") == "SUCCESS":
+                txt_ok = f"✅ *¡Movimiento registrado con éxito!*\n\n"
+                txt_ok += f"📑 Guardado en pestaña: *{resp.get('hoja')}*\n"
+                if resp.get("url_evidencia"):
+                    txt_ok += f"📸 Evidencia fotográfica guardada en Google Drive.\n"
+                bot.send_message(chat_id, txt_ok, parse_mode='Markdown')
+                sesiones[chat_id] = {}
+                bot.send_message(chat_id, "¿Qué deseas hacer ahora?", reply_markup=menu_principal())
+            else:
+                bot.reply_to(m, "⚠️ Error: " + str(resp.get("mensaje")))
+        except Exception as e:
+            bot.reply_to(m, "❌ Error registrando financiero: " + str(e))
+        return
+
+    # 2. Guardar Operación Hotel
+    if ses.get("filas"):
+        cfg = ses
         filas = cfg["filas"]
         tipo_op = filas[0].get("tipo_operacion_detectada", cfg.get("tipo", "HUESPEDES"))
         
@@ -694,8 +810,9 @@ def confirmar_guardado(m):
 @bot.message_handler(func=lambda m: m.text and m.text.strip().upper() == 'NO')
 def cancelar_guardado(m):
     chat_id = m.chat.id
-    if chat_id in sesiones and sesiones[chat_id].get("filas"):
+    if chat_id in sesiones and (sesiones[chat_id].get("filas") or sesiones[chat_id].get("movimiento_fin_pendiente")):
         sesiones[chat_id]["filas"] = []
+        sesiones[chat_id]["movimiento_fin_pendiente"] = None
         bot.reply_to(m, "❌ Operación cancelada. Puedes enviar nuevos datos o escribir *Hola*.", parse_mode='Markdown')
 
 @bot.message_handler(func=lambda m: m.content_type == 'text' and m.text not in ['/start', '/menu'])
@@ -704,9 +821,29 @@ def procesar_texto_general(m):
     ses = sesiones.get(chat_id, {})
     paso = ses.get("paso_custodia")
     
-    # -------------------------------------------------------------------------
-    # FLUJOS INTERACTIVOS DE CUSTODIA (QUIÉN ENTREGA Y QUIÉN RECIBE)
-    # -------------------------------------------------------------------------
+    # 1. Flujo Financiero por Texto
+    if ses.get("modulo") == "FINANCIERO":
+        tipo_mov = ses.get("tipo_fin", "EGRESO")
+        bot.reply_to(m, "🧾 Analizando movimiento con IA...", parse_mode='Markdown')
+        try:
+            datos_fin = analizar_financiero_ia(m.text, tipo_mov)
+            sesiones[chat_id]["movimiento_fin_pendiente"] = datos_fin
+            val_fmt = f"{datos_fin.get('valor', 0):,.2f}"
+            resumen_fin = f"📊 *CONFIRMACIÓN DE {tipo_mov}:*\n\n"
+            resumen_fin += f"📅 *Fecha:* `{datos_fin.get('fecha')}`\n"
+            resumen_fin += f"🏷️ *Categoría:* *{datos_fin.get('categoria')}*\n"
+            resumen_fin += f"📝 *Concepto:* {datos_fin.get('concepto')}\n"
+            resumen_fin += f"🏢 *Tercero / Proveedor:* {datos_fin.get('tercero')}\n"
+            resumen_fin += f"💳 *Método de Pago:* {datos_fin.get('metodo_pago')}\n"
+            resumen_fin += f"👤 *Responsable:* {datos_fin.get('responsable')}\n"
+            resumen_fin += f"💰 *Valor:* *${val_fmt}*\n\n"
+            resumen_fin += "💬 Escribe *SI* para registrar en Sheets o *NO* para cancelar."
+            bot.send_message(chat_id, resumen_fin, parse_mode='Markdown')
+        except Exception as e:
+            bot.reply_to(m, "❌ Error analizando texto financiero: " + str(e))
+        return
+
+    # 2. Flujo Custodia Hoteles
     if paso == "RESP_LAVAARTE_DESPACHO":
         ses["resp_lavaarte"] = m.text.strip()
         ses["resp_hotel"] = "Por entregar en hotel"
@@ -758,9 +895,7 @@ def procesar_texto_general(m):
         bot.reply_to(m, f"✅ Recibe por Lavaarte: *{m.text.strip()}*\n\n📸 *¡Listo!* Ya puedes enviar las fotos de las planillas, notas de voz o texto de la ropa recibida:", parse_mode='Markdown')
         return
 
-    # -------------------------------------------------------------------------
-    # MODOS TRADICIONALES
-    # -------------------------------------------------------------------------
+    # 3. Flujos Habituales de Consulta, Corrección o Entrada de Ropa
     modo = ses.get("modo")
     if modo == "CONSULTA":
         bot.reply_to(m, "🔎 Consultando las hojas de cálculo...")
@@ -768,10 +903,8 @@ def procesar_texto_general(m):
             prompt_clasifica = f"Identifica a cuál clave de servicio pertenece esta consulta ('{m.text}'). Opciones: {list(ARBOL_SERVICIOS.keys())}. Devuelve solo la clave:"
             clave_hotel = llamar_gemini_rotativo([prompt_clasifica]).strip().replace("`", "").replace("'", "").replace('"', "")
             cfg = ARBOL_SERVICIOS.get(clave_hotel, ARBOL_SERVICIOS["wyndham_huespedes"])
-            
             payload = {"accion": "GET_DATOS", "ruta": cfg["ruta"], "destino": cfg["hoja"]}
             resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=90).json()
-            
             if resp.get("status") == "SUCCESS":
                 respuesta_ia = interpretar_consulta_ia(m.text, resp.get("datos", []), cfg["hoja"])
                 enviar_mensaje_segmentado(chat_id, respuesta_ia)
@@ -786,15 +919,7 @@ def procesar_texto_general(m):
         try:
             datos_corr = parsear_correccion_ia(m.text)
             cfg = ARBOL_SERVICIOS.get(datos_corr.get("hotel_clave"), ARBOL_SERVICIOS["wyndham_huespedes"])
-            
-            payload = {
-                "accion": "CORREGIR_REGISTRO",
-                "ruta": cfg["ruta"],
-                "destino": cfg["hoja"],
-                "tipo_operacion": cfg["tipo"],
-                "correccion": datos_corr
-            }
-            
+            payload = {"accion": "CORREGIR_REGISTRO", "ruta": cfg["ruta"], "destino": cfg["hoja"], "tipo_operacion": cfg["tipo"], "correccion": datos_corr}
             resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=90).json()
             if resp.get("status") == "SUCCESS":
                 bot.reply_to(m, f"✅ *¡Corrección realizada con éxito!*\n\n🏨 *Hotel:* {cfg['hotel']}\n📋 *Prenda:* {datos_corr.get('prenda')}\n🔢 *Nuevo Valor:* {datos_corr.get('nuevo_valor')}", parse_mode='Markdown')
@@ -834,5 +959,5 @@ def procesar_texto_general(m):
 # ==========================================
 # INICIO DEL SERVICIO
 # ==========================================
-print("🚀 Bot Maestro Lavaarte en línea ")
+print("🚀 Bot Maestro Lavaarte en línea (Control Financiero Integrado / Evidencias en Drive)")
 bot.infinity_polling()
