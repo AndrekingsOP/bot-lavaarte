@@ -1,0 +1,748 @@
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import requests
+import datetime
+import json
+import io
+import time
+import threading
+from PIL import Image
+from google import genai
+from google.genai import types
+
+# ==========================================
+# CONFIGURACIÓN Y CREDENCIALES
+# ==========================================
+TOKEN = '8816786492:AAEb6VgZzP07JJ9MegbVjiItuS-oopL5728'
+GEMINI_API_KEY = 'AQ.Ab8RN6KHh9xczXiYb-Bm2DSL1Q8zsTyd695lbn3CF74Qc4OzGg'
+URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxqnfe5kd_b0gB50r0IKw69pkRdsYq4vEHLIpwpRZpDYeTMq5TvWVCnsstm7Tj2W0we/exec'
+
+bot = telebot.TeleBot(TOKEN)
+client = genai.Client(api_key=GEMINI_API_KEY)
+
+# MODELOS ACTIVOS CON ROTACIÓN TRANSPARENTE
+MODELOS_ROTACION = [
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-3-flash',
+    'gemini-flash-latest'
+]
+
+sesiones = {}
+cola_fotos = {}
+timers = {}
+lock = threading.Lock()
+
+# ==========================================
+# MAPA MAESTRO DE HOJAS Y SERVICIOS
+# ==========================================
+ARBOL_SERVICIOS = {
+    # RUTA ORIENTE
+    "wyndham_huespedes": {"ruta": "Oriente", "hotel": "Wyndham", "servicio": "Huéspedes", "hoja": "WYNDHAM_HUESPEDES_DATOS", "tipo": "HUESPEDES", "base_defecto": "WYNDHAM HUÉSPEDES"},
+    "wyndham_lenceria": {"ruta": "Oriente", "hotel": "Wyndham", "servicio": "Lencería", "hoja": "WYNDHAM_LENCERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "WYNDHAM LENCERÍA"},
+    "wyndham_manteleria": {"ruta": "Oriente", "hotel": "Wyndham", "servicio": "Mantelería", "hoja": "WYNDHAM_MANTELERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "WYNDHAM MANTELERÍA"},
+    "hilton": {"ruta": "Oriente", "hotel": "Hilton", "servicio": "General", "hoja": "HILTON_DATOS", "tipo": "HUESPEDES", "base_defecto": "HILTON HUÉSPEDES"},
+    "hampton": {"ruta": "Oriente", "hotel": "Hampton", "servicio": "General", "hoja": "HAMPTON_DATOS", "tipo": "HUESPEDES", "base_defecto": "HAMPTON HUÉSPEDES"},
+    "oceania": {"ruta": "Oriente", "hotel": "Oceania", "servicio": "Lencería", "hoja": "OCEANIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "OCEANIA LENCERÍA"},
+    "fontana": {"ruta": "Oriente", "hotel": "Fontana", "servicio": "Lencería", "hoja": "FONTANA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "FONTANA LENCERÍA"},
+    "almacen": {"ruta": "Mostrador", "hotel": "Almacén Central", "servicio": "Control", "hoja": "ALMACEN_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "ALMACÉN"},
+    
+    # RUTA NORTE
+    "dann_huespedes": {"ruta": "Norte", "hotel": "Dann", "servicio": "Huéspedes", "hoja": "DANN_HUESPEDES_DATOS", "tipo": "HUESPEDES", "base_defecto": "DANN HUÉSPEDES"},
+    "dann_empleados": {"ruta": "Norte", "hotel": "Dann", "servicio": "Empleados", "hoja": "DANN_EMPLEADOS_DATOS", "tipo": "HUESPEDES", "base_defecto": "DANN EMPLEADOS"},
+    "dann_lenceria": {"ruta": "Norte", "hotel": "Dann", "servicio": "Lencería", "hoja": "DANN_LENCERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "DANN LENCERÍA"},
+    "suite": {"ruta": "Norte", "hotel": "Suite", "servicio": "General", "hoja": "SUITE_DATOS", "tipo": "HUESPEDES", "base_defecto": "SUITE HUÉSPEDES"},
+    "suite_manteleria": {"ruta": "Norte", "hotel": "Suite", "servicio": "Mantelería", "hoja": "SUITE_MANTELERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "SUITE MANTELERÍA"},
+    "virrey": {"ruta": "Norte", "hotel": "Virrey", "servicio": "General", "hoja": "VIRREY_DATOS", "tipo": "HUESPEDES", "base_defecto": "VIRREY HUÉSPEDES"},
+    "andes_plaza": {"ruta": "Norte", "hotel": "Andes Plaza", "servicio": "General", "hoja": "ANDES_PLAZA_DATOS", "tipo": "HUESPEDES", "base_defecto": "ANDES PLAZA HUÉSPEDES"},
+    "bogotap_datos": {"ruta": "Norte", "hotel": "Bogotá Plaza", "servicio": "Uniformes", "hoja": "BOGOTAP_DATOS", "tipo": "HUESPEDES", "base_defecto": "BOGOTÁ PLAZA UNIFORMES"},
+    "bogotap_huespedes": {"ruta": "Norte", "hotel": "Bogotá Plaza", "servicio": "Huéspedes/Empleados", "hoja": "BOGOTAP_HUESPEDES_DATOS", "tipo": "HUESPEDES", "base_defecto": "BOGOTÁ PLAZA HUÉSPEDES"},
+    "eficacia": {"ruta": "Norte", "hotel": "Eficacia", "servicio": "Dotaciones", "hoja": "EFICACIA_DATOS", "tipo": "MATRIZ_FILAS_CLIENTE", "base_defecto": "EFICACIA DOTACIONES"}
+}
+
+CATALOGO_GLOBAL = """
+[WYNDHAM HUÉSPEDES]
+1|Abrigo/Coat|Lavado en seco|13200
+2|Bata/Dress|Lavado en seco|11000
+3|Bermuda|Lavado|4800
+4|Brassiere/Brassiere|Lavado|3500
+5|Bufanda/Scarf/Pasmina|Lavado en seco|5950
+6|Blusa/Blouse|Lavado|5950
+7|Blusa en seda/ Silk blouse|Lavado en seco|5950
+8|Camisa/Dress Shirt|Lavado|5950
+9|Camiseta Sport|Lavado|5950
+10|Camiseta/T Shirt|Lavado|3800
+11|Calzoncillo/Undershort|Lavado|1700
+12|Calcetines/Socks|Lavado|1700
+13|Corbata/Tie|Lavado en seco|5950
+14|Chaleco/Vest|Lavado|5950
+15|Chaqueta|Lavado|10400
+16|Chaqueta plumas/Down Jacket|Lavado en seco|15800
+17|Falda/ Skirt|Lavado en seco|5950
+18|Faja|Lavado|7450
+19|Gorro/Cap|Lavado|4800
+20|Guante/Glove|Lavado|4800
+21|Interiores/ Panties|Lavado|1700
+22|Jeans|Lavado|5950
+23|Maleta / Morral|Lavado|12650
+24|Overol/Overalls|Lavado|12300
+25|Pantalón/Pants|Lavado en seco|5950
+26|Pantaloneta/Short|Lavado|2700
+27|Pijama|Lavado|8650
+28|Suéter/Sweter|Lavado|5950
+29|Pañuelo|Lavado|1700
+30|Ruana|Lavado en seco|13200
+31|Sudadera|Lavado en seco|11000
+32|Toalla|Lavado|5250
+33|Traje/Suit|Lavado en seco|11000
+34|Vestido dama seda|Lavado en seco|26300
+35|Vestido baño|Lavado|11000
+36|Zapatos tenis/ Tenis Shoes|Lavado|16400
+
+[PRECIOS NORTE 2026 - HUÉSPEDES DANN / VIRREY / ANDES / BOGOTÁ PLAZA]
+1|Abrigo/ Coat|Lavado en seco|19950
+2|Bata/Dress|Lavado en seco|19950
+3|Bermuda de vestir|Lavado|9918
+4|Blazer (chaqueta paño)|Lavado en seco|12543
+5|Blusa en seda/ Silk blouse|Lavado en seco|10602
+6|Blusa/Blouse|Lavado|10431
+7|Body|Lavado|12198
+8|Brassiere/Brassiere|Lavado|5814
+9|Bufanda/Scarf|Lavado en seco|6156
+10|Calcetines/Socks|Lavado|3306
+11|Calzoncillo/Undershort|Lavado|3306
+12|Camisa/Dress Shirt|Lavado|9918
+13|Camiseta Sport|Lavado|9918
+14|Camiseta/T Shirt|Lavado|7410
+15|Chaleco/Vest|Lavado|14022
+16|Chaqueta plumas/Down Jacket|Lavado en seco|20520
+17|Chaqueta/Jacket|Lavado|14022
+18|Cobija huésped pequeña|Lavado|12350
+19|Corbata/Tie|Lavado en seco|9918
+20|Faja|Lavado|11286
+21|Falda/ Skirt|Lavado en seco|9918
+22|Gabardina / Trench coat|Lavado en seco|21950
+23|Gorro/Cap|Lavado|4902
+24|Guante/Glove|Lavado|4902
+25|Interiores/ Panties|Lavado|3306
+26|Jeans|Lavado|9918
+27|Leggis / leggings|Lavado|9918
+28|Licra deportiva|Lavado|5850
+29|Maleta - morral|Lavado|15350
+30|Overol/Overalls|Lavado|9918
+31|Pantalón/Pants|Lavado en seco|9918
+32|Pantaloneta/Short|Lavado|7125
+33|Pañuelo|Lavado|3306
+34|Pashmina|Lavado en seco|12846
+35|Pijama|Lavado|11400
+36|Ruana|Lavado en seco|15860
+37|Smoking / Tuxedo|Lavado en seco|26350
+38|Sudadera/Sweatshirt|Lavado en seco|11799
+39|Suéter/Sweter|Lavado|10944
+40|Traje/Suit|Lavado en seco|19836
+41|Vestido Dama Corto|Lavado en seco|25000
+42|Vestido Dama Largo|Lavado en seco|59500
+43|vestido de baño/Bathing dress|Lavado|12198
+44|Zapatos tennis / Tennis Shoes|Lavado|17100
+
+[EFICACIA DOTACIONES]
+1|Bata paño|Lavado|15755
+2|Blusa/ Camisa|Lavado|7878
+3|Bolsa Grande|Lavado|24150
+4|Camiseta Sport|Lavado|7015
+5|Canguro|Lavado|7878
+6|Casco moto|Lavado|20585
+7|Cinturon|Lavado|6349
+8|Chaqueta/Jacket|Lavado|7878
+9|Delantal|Lavado|5463
+10|Gorra/Cap|Lavado|4140
+11|Guantes|Lavado|7878
+12|Impermeable x2|Lavado|14386
+13|Maleta de viaje|Lavado|29095
+14|Morral / Maleta|Lavado|14548
+15|Overol|Lavado|9315
+16|Pantalón/Pants/JEANS|Lavado|7878
+17|Pañoleta / Pañuelo|Lavado|5463
+18|Rodillera|Lavado|5568
+19|Suéter|Lavado|7878
+20|Tennis / Zapato|Lavado|18170
+"""
+
+# ==========================================
+# MOTOR RESILIENTE CON ROTACIÓN ANTI-429 & ANTI-503
+# ==========================================
+def llamar_gemini_rotativo(contents):
+    ultimo_error = None
+    for modelo in MODELOS_ROTACION:
+        for intento in range(2):
+            try:
+                resp = client.models.generate_content(model=modelo, contents=contents)
+                if resp and resp.text:
+                    return resp.text
+            except Exception as e:
+                err_str = str(e)
+                ultimo_error = e
+                if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "404", "NOT_FOUND"]):
+                    time.sleep(0.8)
+                    break
+                else:
+                    time.sleep(1.0)
+                    continue
+    raise ultimo_error
+
+def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None):
+    fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
+    hotel = config_sesion['hotel']
+    servicio = config_sesion['servicio']
+    ruta = config_sesion.get('ruta', 'Oriente')
+    tipo_op = config_sesion.get('tipo', 'HUESPEDES')
+    es_wyndham = (config_sesion.get('key') == "wyndham_huespedes")
+    es_eficacia = (config_sesion.get('key') == "eficacia")
+
+    prompt = f"""
+    Eres el auditor contable oficial de Lavaarte Lavandería SAS.
+    Operación: Hotel '{hotel}', Servicio '{servicio}', Ruta: '{ruta}', Tipo: '{tipo_op}'.
+    
+    CRITERIOS DE EXTRACCIÓN Y MAPEO:
+    1. EXCLUSIÓN DE EMPLEADOS (SOLO PARA WYNDHAM HUÉSPEDES):
+       - ¿Es Wyndham Huéspedes?: {es_wyndham}
+       - SI ES WYNDHAM HUÉSPEDES: Procesa ÚNICAMENTE habitaciones de huéspedes. DESCARTA prendas de empleados o uniformes sin habitación.
+       - PARA HOTELES DE RUTA NORTE Y DEMÁS HOTELES: Procesa TANTO habitaciones de huéspedes COMO empleados/uniformes.
+
+    2. REGLAS ESTRICTAS DE CLASIFICACIÓN DE PRENDAS:
+       - CAMISETA vs CAMISETA SPORT:
+         * Si dice 'Camiseta' (a secas, sin la palabra sport) -> 'Camiseta/T Shirt' (Código 10 / Tarifa básica).
+         * Solo si dice EXPLÍCITAMENTE 'Camiseta Sport' o 'Sport' al lado de camiseta -> 'Camiseta Sport' (Código 9 / Tarifa sport).
+       - LICRAS / LEGGINGS: Se cobran y clasifican como 'Pantalón/Pants' (Código 25 / 31).
+       - TOPS: Se cobran y clasifican como 'Brassiere/Brassiere' (Código 4 / 8).
+       - PANTALÓN DE SUDADERA / DEPORTIVO: Asignar a 'Pantalón/Pants' (Código 25 / 31).
+
+    3. CASO EFICACIA (AGRUPACIÓN POR EMPRESA):
+       - ¿Es Eficacia?: {es_eficacia}
+       - Si es Eficacia, 'habitacion' = NOMBRE EXACTO DE LA EMPRESA (ej: 'MONDELEZ', 'ALPINA', 'ÉXITO', 'PAYJOY', 'TIGO').
+       - Prenda = Nombre de la prenda (ej: 'Pantalón', 'Chaqueta', 'Camiseta', 'Suéter', 'Chaleco', 'Delantal', 'Camisa', 'Cinturón', 'Impermeable', 'Guantes', 'Gorra', 'Morral').
+
+    4. REMISIÓN Y HABITACIÓN:
+       - 'remision': Número de remisión o consecutivo (si no hay, coloca el número de habitación).
+       - 'habitacion': Número de habitación (ej: '504', '1165') o nombre del empleado/empresa.
+
+    5. CÓDIGOS DE CATÁLOGO:
+       - 'codigo': ID numérico de catálogo de la prenda según la lista de abajo. NUNCA coloques el número de habitación en 'codigo'.
+
+    6. COLUMNA EXTRA (+50% RECARGO):
+       - Si el comprobante o usuario indica 'EXTRA', 'URGENTE', 'EXPRESS':
+         * 'extra' = 'Sí'
+         * 'valorUnitario' = Tarifa Base * 1.50
+         * 'valorTotal' = Cantidad * (Tarifa Base * 1.50)
+       - Si NO dice extra:
+         * 'extra' = 'No'
+         * 'valorUnitario' = Tarifa Base
+         * 'valorTotal' = Cantidad * Tarifa Base
+
+    CATÁLOGO DE REFERENCIA:
+    {CATALOGO_GLOBAL}
+    
+    {f"AJUSTE DEL USUARIO: {correccion_usuario}" if correccion_usuario else ""}
+    
+    Devuelve EXCLUSIVAMENTE un JSON válido (array de objetos sin bloques markdown):
+    [
+      {{
+        "fecha": "{fecha_hoy}",
+        "remision": "1234",
+        "habitacion": "504",
+        "codigo": 8,
+        "prenda": "Camisa/Dress Shirt",
+        "servicio": "Lavado",
+        "cantidad": 1,
+        "valorUnitario": 5950,
+        "valorTotal": 5950,
+        "extra": "No",
+        "tipo_operacion_detectada": "{tipo_op}"
+      }}
+    ]
+    """
+    
+    contents = [prompt]
+    if isinstance(contenido_multimodal, list):
+        contents.extend(contenido_multimodal)
+    elif contenido_multimodal is not None:
+        contents.append(contenido_multimodal)
+        
+    texto_raw = llamar_gemini_rotativo(contents)
+    texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
+    return json.loads(texto)
+
+def interpretar_consulta_ia(pregunta, matriz_datos, nombre_hoja):
+    prompt = f"""
+    Eres el auditor y asistente financiero de Lavaarte Lavandería SAS.
+    Pregunta: "{pregunta}"
+    
+    Datos de la hoja '{nombre_hoja}':
+    {json.dumps(matriz_datos[:40], ensure_ascii=False)}
+    
+    Responde en Markdown claro para Telegram.
+    """
+    return llamar_gemini_rotativo([prompt])
+
+def parsear_correccion_ia(texto_usuario):
+    prompt = f"""
+    Eres el asistente de Lavaarte. Analiza la corrección:
+    Texto: "{texto_usuario}"
+    
+    Devuelve un JSON con:
+    - hotel_clave: una de {list(ARBOL_SERVICIOS.keys())}
+    - identificador: número de habitación o nombre de empresa
+    - dia: número de día si es lencería, o null
+    - prenda: nombre de la prenda
+    - nuevo_valor: número entero
+    """
+    resp = llamar_gemini_rotativo([prompt])
+    return json.loads(resp.strip().replace("```json", "").replace("```", "").strip())
+
+# ==========================================
+# ENVÍO SEGURO CON SEGMENTACIÓN (ANTI-400)
+# ==========================================
+def enviar_mensaje_segmentado(chat_id, texto, reply_markup=None):
+    MAX_CHARS = 3800
+    if len(texto) <= MAX_CHARS:
+        bot.send_message(chat_id, texto, reply_markup=reply_markup, parse_mode='Markdown')
+        return
+
+    partes = []
+    lineas = texto.split('\n')
+    bloque = ""
+    for l in lineas:
+        if len(bloque) + len(l) + 1 > MAX_CHARS:
+            partes.append(bloque)
+            bloque = l + "\n"
+        else:
+            bloque += l + "\n"
+    if bloque:
+        partes.append(bloque)
+
+    for i, p in enumerate(partes):
+        markup = reply_markup if i == len(partes) - 1 else None
+        bot.send_message(chat_id, p, reply_markup=markup, parse_mode='Markdown')
+
+# ==========================================
+# MENÚS EN TELEGRAM
+# ==========================================
+def menu_principal():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("🧭 Ruta Oriente", callback_data="ruta_oriente"),
+        InlineKeyboardButton("🧭 Ruta Norte", callback_data="ruta_norte"),
+        InlineKeyboardButton("🔍 Auditoría / Consultas IA", callback_data="modo_consulta"),
+        InlineKeyboardButton("✏️ Corregir Registro", callback_data="modo_corregir"),
+        InlineKeyboardButton("📋 Verificar Hojas en Sheets", callback_data="verificar_hojas")
+    )
+    return markup
+
+def menu_hoteles_oriente():
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("👔 Wyndham Huéspedes", callback_data="sel_wyndham_huespedes"),
+        InlineKeyboardButton("🛏️ Wyndham Lencería", callback_data="sel_wyndham_lenceria"),
+        InlineKeyboardButton("🍽️ Wyndham Mantelería", callback_data="sel_wyndham_manteleria"),
+        InlineKeyboardButton("🏨 Hotel Hilton", callback_data="sel_hilton"),
+        InlineKeyboardButton("🏨 Hotel Hampton", callback_data="sel_hampton"),
+        InlineKeyboardButton("🏨 Hotel Oceania", callback_data="sel_oceania"),
+        InlineKeyboardButton("🏨 Hotel Fontana", callback_data="sel_fontana"),
+        InlineKeyboardButton("📦 Almacén Central", callback_data="sel_almacen"),
+        InlineKeyboardButton("⬅️ Volver al Menú", callback_data="menu_inicio")
+    )
+    return markup
+
+def menu_hoteles_norte():
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("👔 Dann Huéspedes", callback_data="sel_dann_huespedes"),
+        InlineKeyboardButton("👤 Dann Empleados", callback_data="sel_dann_empleados"),
+        InlineKeyboardButton("🛏️ Dann Lencería", callback_data="sel_dann_lenceria"),
+        InlineKeyboardButton("🏨 Hotel Suite", callback_data="sel_suite"),
+        InlineKeyboardButton("🍽️ Suite Mantelería", callback_data="sel_suite_manteleria"),
+        InlineKeyboardButton("🏨 Hotel Virrey", callback_data="sel_virrey"),
+        InlineKeyboardButton("🏨 Hotel Andes Plaza", callback_data="sel_andes_plaza"),
+        InlineKeyboardButton("👔 Bogotá Plaza Huéspedes", callback_data="sel_bogotap_huespedes"),
+        InlineKeyboardButton("👔 Bogotá Plaza Uniformes", callback_data="sel_bogotap_datos"),
+        InlineKeyboardButton("🏭 Eficacia Dotaciones", callback_data="sel_eficacia"),
+        InlineKeyboardButton("⬅️ Volver al Menú", callback_data="menu_inicio")
+    )
+    return markup
+
+def menu_recibir_entregar(hotel_key):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("📥 Recibir Ropa", callback_data="mov_recibir_" + str(hotel_key)),
+        InlineKeyboardButton("📤 Entregar Ropa", callback_data="mov_entregar_" + str(hotel_key))
+    )
+    markup.add(InlineKeyboardButton("⬅️ Cambiar Hotel", callback_data="menu_inicio"))
+    return markup
+
+def menu_post_guardado():
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("📸 Enviar más datos a este hotel", callback_data="accion_seguir"),
+        InlineKeyboardButton("🏠 Terminar y volver al Menú", callback_data="menu_inicio")
+    )
+    return markup
+
+def generar_resumen(filas, config_sesion, total_fotos=1):
+    if not filas:
+        return "⚠️ No se detectaron prendas válidas."
+    
+    hotel_txt = str(config_sesion.get('hotel', '')) + " - " + str(config_sesion.get('servicio', ''))
+    fecha_reg = filas[0].get('fecha', datetime.datetime.now().strftime("%d/%m/%Y"))
+    tipo_op = filas[0].get('tipo_operacion_detectada', config_sesion.get('tipo', 'HUESPEDES'))
+    mov = config_sesion.get('movimiento', '')
+    es_eficacia = (config_sesion.get('key') == "eficacia")
+    
+    resumen = "🏨 *HOTEL / SERVICIO:* " + hotel_txt
+    if mov:
+        resumen += " (*" + str(mov) + "*)"
+    resumen += "\n📅 *FECHA:* " + str(fecha_reg) + "\n"
+    
+    if es_eficacia or tipo_op == "MATRIZ_FILAS_CLIENTE":
+        total_p = sum(item.get('cantidad', 0) for item in filas)
+        resumen += "📊 *Total Dotaciones:* " + str(total_p) + " prendas\n"
+        resumen += "📋 *DESGLOSE CONSOLIDADO POR EMPRESA:*\n"
+        cuenta_act = ""
+        for it in filas:
+            cta = str(it.get('habitacion', it.get('habitacion_o_persona', 'GENERAL')))
+            if cta != cuenta_act:
+                cuenta_act = cta
+                resumen += "\n🏢 *Empresa:* `" + cuenta_act + "`\n"
+            resumen += "• " + str(it.get('prenda', '')) + " - Cant: *" + str(it.get('cantidad', 0)) + "*\n"
+    elif tipo_op == "LENCERIA_MATRIZ":
+        total_p = sum(item.get('cantidad', 0) for item in filas)
+        resumen += "📊 *Total Lencería:* " + str(total_p) + " prendas\n"
+        resumen += "📋 *DETALLE:*\n"
+        for it in filas:
+            resumen += "• " + str(it.get('prenda', '')) + " - Cant: *" + str(it.get('cantidad', 0)) + "*\n"
+    else:
+        total_factura = sum(item.get('valorTotal', 0) for item in filas)
+        resumen += "💰 *Total Liquidado:* $" + f"{total_factura:,.2f}" + "\n"
+        resumen += "📋 *DETALLE AUDITADO:*\n"
+        hab_actual = ""
+        for it in filas:
+            ident = str(it.get('habitacion', it.get('habitacion_o_persona', 'General')))
+            if ident != hab_actual:
+                hab_actual = ident
+                es_ex = it.get('extra', 'No')
+                tag_ex = " ⚡ EXTRA (+50%)" if str(es_ex).upper() in ['SI', 'SÍ'] else " (Estándar)"
+                rem_txt = f" [Rem: {it.get('remision')}]" if it.get('remision') and it.get('remision') != ident else ""
+                resumen += "\n🚪 *Habitación / Registro:* `" + hab_actual + "`" + rem_txt + tag_ex + "\n"
+            p_cod = str(it.get('codigo', '-'))
+            p_nom = str(it.get('prenda', ''))
+            p_cant = str(it.get('cantidad', 0))
+            p_unit = f"{it.get('valorUnitario', 0):,.2f}"
+            p_tot = f"{it.get('valorTotal', 0):,.2f}"
+            p_extra = str(it.get('extra', 'No'))
+            resumen += f"• [Cód {p_cod}] {p_nom} - Cant: {p_cant} - Unit: ${p_unit} - Total: ${p_tot} [Extra: {p_extra}]\n"
+            
+    resumen += "\n💬 *¿Qué deseas hacer?*\n"
+    resumen += "• Escribe *SI* para guardar en Google Sheets.\n"
+    resumen += "• Escribe *NO* para cancelar.\n"
+    resumen += "• O escribe cualquier corrección directa."
+    return resumen
+
+# ==========================================
+# MANEJADORES DE EVENTOS TELEGRAM
+# ==========================================
+@bot.message_handler(commands=['start', 'menu'])
+def cmd_start(m):
+    sesiones[m.chat.id] = {}
+    bot.send_message(m.chat.id, "👋 ¡Hola! Bienvenido al sistema central de *Lavaarte Lavanderia SAS*.\n\nSelecciona una opción de trabajo:", reply_markup=menu_principal(), parse_mode='Markdown')
+
+@bot.message_handler(func=lambda m: m.text and m.text.strip().lower() in ['hola', 'menu', 'inicio', 'cambiar hotel', 'rutas'])
+def saludo_texto(m):
+    cmd_start(m)
+
+@bot.callback_query_handler(func=lambda call: call.data in ['menu_inicio', 'ruta_oriente', 'ruta_norte', 'modo_consulta', 'modo_corregir', 'verificar_hojas'])
+def manejar_menu_principal(call):
+    chat_id = call.message.chat.id
+    if call.data == 'menu_inicio':
+        sesiones[chat_id] = {}
+        bot.edit_message_text("Selecciona una opción de trabajo:", chat_id, call.message.message_id, reply_markup=menu_principal())
+    elif call.data == 'ruta_oriente':
+        bot.edit_message_text("🧭 *RUTA ORIENTE* - Selecciona el hotel:", chat_id, call.message.message_id, reply_markup=menu_hoteles_oriente(), parse_mode='Markdown')
+    elif call.data == 'ruta_norte':
+        bot.edit_message_text("🧭 *RUTA NORTE* - Selecciona el hotel:", chat_id, call.message.message_id, reply_markup=menu_hoteles_norte(), parse_mode='Markdown')
+    elif call.data == 'modo_consulta':
+        sesiones[chat_id] = {"modo": "CONSULTA"}
+        bot.edit_message_text("🔍 *MODO AUDITORÍA / CONSULTAS CON IA*\n\nEscribe tu pregunta en lenguaje natural.", chat_id, call.message.message_id, parse_mode='Markdown')
+    elif call.data == 'modo_corregir':
+        sesiones[chat_id] = {"modo": "CORREGIR"}
+        bot.edit_message_text("✏️ *MODO CORRECCIÓN DE REGISTRO*\n\nEscribe el ajuste que deseas realizar de forma explícita.", chat_id, call.message.message_id, parse_mode='Markdown')
+    elif call.data == 'verificar_hojas':
+        bot.send_message(chat_id, "🔎 Consultando hojas existentes en Google Sheets...")
+        try:
+            resp_o = requests.post(URL_APPS_SCRIPT, data=json.dumps({"accion": "LISTAR_HOJAS", "ruta": "Oriente"}), headers={'Content-Type': 'application/json'}, timeout=20).json()
+            resp_n = requests.post(URL_APPS_SCRIPT, data=json.dumps({"accion": "LISTAR_HOJAS", "ruta": "Norte"}), headers={'Content-Type': 'application/json'}, timeout=20).json()
+            
+            txt_diag = "📋 *RECONOCIMIENTO DE HOJAS CONECTADAS:*\n\n"
+            txt_diag += "🧭 *Libro Oriente:*\n`" + ", ".join(resp_o.get("hojas", [])) + "`\n\n"
+            txt_diag += "🧭 *Libro Norte:*\n`" + ", ".join(resp_n.get("hojas", [])) + "`\n\n"
+            txt_diag += "✅ *El localizador tolerante está activo para guardar en cualquiera de ellas sin error.*"
+            enviar_mensaje_segmentado(chat_id, txt_diag)
+        except Exception as e:
+            bot.send_message(chat_id, "❌ Error consultando hojas: " + str(e))
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('sel_'))
+def seleccionar_hotel(call):
+    key = call.data.replace('sel_', '')
+    cfg = ARBOL_SERVICIOS.get(key)
+    if not cfg:
+        bot.answer_callback_query(call.id, "Hotel no encontrado.")
+        return
+        
+    sesiones[call.message.chat.id] = dict(cfg)
+    sesiones[call.message.chat.id]["key"] = key
+    sesiones[call.message.chat.id]["filas"] = []
+    
+    if key == "eficacia":
+        sesiones[call.message.chat.id]["movimiento"] = "RECEPCIÓN"
+        bot.edit_message_text(
+            "🏭 *EFICACIA DOTACIONES*\n\n📸 *Puedes enviar:* Foto(s) de la planilla con bloques por empresa (MONDELEZ, ALPINA, ÉXITO, PAYJOY...), texto o Nota de Voz.",
+            call.message.chat.id, call.message.message_id, parse_mode='Markdown'
+        )
+    elif cfg["tipo"] == "LENCERIA_MATRIZ" or "uniforme" in key or "empleado" in key:
+        bot.edit_message_text(
+            "🏨 Has seleccionado: *" + str(cfg['hotel']) + " (" + str(cfg['servicio']) + ")*\n\n¿Qué movimiento deseas registrar?",
+            call.message.chat.id, call.message.message_id,
+            reply_markup=menu_recibir_entregar(key),
+            parse_mode='Markdown'
+        )
+    else:
+        aviso_filtro = " (solo se registrarán habitaciones de huéspedes)" if key == "wyndham_huespedes" else ""
+        bot.edit_message_text(
+            "✅ Hotel activo: *" + str(cfg['hotel']) + " - " + str(cfg['servicio']) + "*" + aviso_filtro + "\n\n📸 *Puedes enviar:* Foto(s), texto o Nota de Voz.",
+            call.message.chat.id, call.message.message_id,
+            parse_mode='Markdown'
+        )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('mov_'))
+def seleccionar_movimiento(call):
+    partes = call.data.split('_')
+    tipo_mov = "RECEPCIÓN" if partes[1] == "recibir" else "ENTREGA"
+    key = "_".join(partes[2:])
+    
+    cfg = ARBOL_SERVICIOS.get(key)
+    sesiones[call.message.chat.id] = dict(cfg)
+    sesiones[call.message.chat.id]["key"] = key
+    sesiones[call.message.chat.id]["movimiento"] = tipo_mov
+    sesiones[call.message.chat.id]["filas"] = []
+    
+    bot.edit_message_text(
+        "✅ Operación: *" + str(cfg['hotel']) + " - " + str(cfg['servicio']) + "*\n📋 Tipo: *" + str(tipo_mov) + "*\n\n📸 *Puedes enviar:* Foto(s), texto o Nota de Voz.",
+        call.message.chat.id, call.message.message_id,
+        parse_mode='Markdown'
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data in ['accion_seguir', 'menu_inicio'])
+def manejar_post_guardado(call):
+    chat_id = call.message.chat.id
+    if call.data == 'accion_seguir':
+        cfg = sesiones.get(chat_id, {})
+        bot.send_message(chat_id, "📸 Envíame los siguientes datos para *" + str(cfg.get('hotel', '')) + "*.", parse_mode='Markdown')
+    else:
+        cmd_start(call.message)
+
+def procesar_lote_fotos(chat_id):
+    with lock:
+        if chat_id not in cola_fotos or not cola_fotos[chat_id]:
+            return
+        imgs = list(cola_fotos[chat_id])
+        cola_fotos[chat_id] = []
+        if chat_id in timers:
+            del timers[chat_id]
+            
+    cfg = sesiones.get(chat_id, ARBOL_SERVICIOS["wyndham_huespedes"])
+    bot.send_message(chat_id, "🔍 Procesando " + str(len(imgs)) + " foto(s)...", parse_mode='Markdown')
+    
+    try:
+        filas = analizar_con_ia(imgs, cfg)
+        sesiones[chat_id]["filas"] = filas
+        sesiones[chat_id]["total_fotos"] = len(imgs)
+        resumen_txt = generar_resumen(filas, cfg, len(imgs))
+        enviar_mensaje_segmentado(chat_id, resumen_txt)
+    except Exception as e:
+        bot.send_message(chat_id, "❌ Error analizando imágenes: " + str(e))
+
+@bot.message_handler(content_types=['photo'])
+def recibir_fotos(message):
+    chat_id = message.chat.id
+    if chat_id not in sesiones or not sesiones[chat_id].get("hotel"):
+        sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
+        
+    file_info = bot.get_file(message.photo[-1].file_id)
+    file_bytes = bot.download_file(file_info.file_path)
+    img = Image.open(io.BytesIO(file_bytes))
+    
+    with lock:
+        if chat_id not in cola_fotos:
+            cola_fotos[chat_id] = []
+        cola_fotos[chat_id].append(img)
+        if chat_id in timers:
+            timers[chat_id].cancel()
+        t = threading.Timer(2.5, procesar_lote_fotos, args=[chat_id])
+        timers[chat_id] = t
+        t.start()
+
+@bot.message_handler(content_types=['voice', 'audio'])
+def recibir_audio(message):
+    chat_id = message.chat.id
+    if chat_id not in sesiones or not sesiones[chat_id].get("hotel"):
+        sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
+        
+    cfg = sesiones[chat_id]
+    bot.reply_to(message, "🎙️ Procesando audio...", parse_mode='Markdown')
+    
+    try:
+        file_id = message.voice.file_id if message.voice else message.audio.file_id
+        file_info = bot.get_file(file_id)
+        audio_bytes = bot.download_file(file_info.file_path)
+        
+        audio_part = types.Part.from_bytes(data=audio_bytes, mime_type="audio/ogg")
+        filas = analizar_con_ia([audio_part], cfg)
+        
+        sesiones[chat_id]["filas"] = filas
+        resumen_txt = generar_resumen(filas, cfg, 1)
+        enviar_mensaje_segmentado(chat_id, resumen_txt)
+    except Exception as e:
+        bot.reply_to(message, "❌ Error procesando audio: " + str(e))
+
+@bot.message_handler(func=lambda m: m.text and m.text.strip().upper() in ['SI', 'SÍ'])
+def confirmar_guardado(m):
+    chat_id = m.chat.id
+    if chat_id in sesiones and sesiones[chat_id].get("filas"):
+        cfg = sesiones[chat_id]
+        filas = cfg["filas"]
+        tipo_op = filas[0].get("tipo_operacion_detectada", cfg.get("tipo", "HUESPEDES"))
+        
+        bot.reply_to(m, "⏳ Guardando en *" + str(cfg['hoja']) + "*...", parse_mode='Markdown')
+        try:
+            dia_actual = datetime.datetime.now().day
+            if filas and filas[0].get('fecha'):
+                try:
+                    dia_actual = int(filas[0]['fecha'].split('/')[0])
+                except:
+                    pass
+                    
+            payload = {
+                "accion": "GUARDAR",
+                "ruta": cfg.get("ruta", "Oriente"),
+                "destino": cfg["hoja"],
+                "tipo_operacion": tipo_op,
+                "movimiento": cfg.get("movimiento", "RECEPCIÓN"),
+                "dia": dia_actual,
+                "filas": filas
+            }
+            
+            resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=90)
+            data_resp = resp.json()
+            
+            if resp.status_code == 200 and data_resp.get("status") == "SUCCESS":
+                hoja_dest = data_resp.get("hoja_guardada", cfg['hotel'])
+                bot.reply_to(m, "✅ *¡Datos guardados con éxito en " + str(hoja_dest) + "!*", parse_mode='Markdown')
+                sesiones[chat_id]["filas"] = []
+                bot.send_message(chat_id, "¿Qué deseas hacer a continuación?", reply_markup=menu_post_guardado())
+            else:
+                bot.reply_to(m, "⚠️ Error del servidor: " + str(data_resp.get("mensaje", resp.text)))
+        except Exception as e:
+            bot.reply_to(m, "❌ Error enviando a Google Sheets: " + str(e))
+    else:
+        bot.reply_to(m, "No hay datos pendientes por confirmar. Escribe *Hola* para abrir el menú.", parse_mode='Markdown')
+
+@bot.message_handler(func=lambda m: m.text and m.text.strip().upper() == 'NO')
+def cancelar_guardado(m):
+    chat_id = m.chat.id
+    if chat_id in sesiones and sesiones[chat_id].get("filas"):
+        sesiones[chat_id]["filas"] = []
+        bot.reply_to(m, "❌ Operación cancelada. Puedes enviar nuevos datos o escribir *Hola*.", parse_mode='Markdown')
+
+@bot.message_handler(func=lambda m: m.content_type == 'text' and m.text not in ['/start', '/menu'])
+def procesar_texto_general(m):
+    chat_id = m.chat.id
+    ses = sesiones.get(chat_id, {})
+    modo = ses.get("modo")
+    
+    # 1. Modo Consulta con IA
+    if modo == "CONSULTA":
+        bot.reply_to(m, "🔎 Consultando las hojas de cálculo...")
+        try:
+            prompt_clasifica = f"Identifica a cuál clave de servicio pertenece esta consulta ('{m.text}'). Opciones: {list(ARBOL_SERVICIOS.keys())}. Devuelve solo la clave:"
+            clave_hotel = llamar_gemini_rotativo([prompt_clasifica]).strip().replace("`", "").replace("'", "").replace('"', "")
+            cfg = ARBOL_SERVICIOS.get(clave_hotel, ARBOL_SERVICIOS["wyndham_huespedes"])
+            
+            payload = {"accion": "GET_DATOS", "ruta": cfg["ruta"], "destino": cfg["hoja"]}
+            resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=90).json()
+            
+            if resp.get("status") == "SUCCESS":
+                respuesta_ia = interpretar_consulta_ia(m.text, resp.get("datos", []), cfg["hoja"])
+                enviar_mensaje_segmentado(chat_id, respuesta_ia)
+            else:
+                bot.reply_to(m, "⚠️ No fue posible acceder a los datos de la hoja.")
+        except Exception as e:
+            bot.reply_to(m, "❌ Error procesando consulta: " + str(e))
+        return
+
+    # 2. Modo Corrección de Registros
+    if modo == "CORREGIR":
+        bot.reply_to(m, "⚙️ Analizando y aplicando corrección...")
+        try:
+            datos_corr = parsear_correccion_ia(m.text)
+            cfg = ARBOL_SERVICIOS.get(datos_corr.get("hotel_clave"), ARBOL_SERVICIOS["wyndham_huespedes"])
+            
+            payload = {
+                "accion": "CORREGIR_REGISTRO",
+                "ruta": cfg["ruta"],
+                "destino": cfg["hoja"],
+                "tipo_operacion": cfg["tipo"],
+                "correccion": datos_corr
+            }
+            
+            resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=90).json()
+            if resp.get("status") == "SUCCESS":
+                bot.reply_to(m, f"✅ *¡Corrección realizada con éxito!*\n\n🏨 *Hotel:* {cfg['hotel']}\n📋 *Prenda:* {datos_corr.get('prenda')}\n🔢 *Nuevo Valor:* {datos_corr.get('nuevo_valor')}", parse_mode='Markdown')
+                sesiones[chat_id] = {}
+                bot.send_message(chat_id, "Selecciona una nueva opción:", reply_markup=menu_principal())
+            else:
+                bot.reply_to(m, "⚠️ Error: " + str(resp.get("mensaje", "No se encontró el registro a corregir.")))
+        except Exception as e:
+            bot.reply_to(m, "❌ Error aplicando corrección: " + str(e))
+        return
+
+    # 3. Modo Ajuste de Lista Pendiente de Guardar
+    if ses.get("filas"):
+        bot.reply_to(m, "⚙️ Aplicando ajustes a la lista...")
+        try:
+            datos_previos = json.dumps(ses["filas"], ensure_ascii=False)
+            filas_actualizadas = analizar_con_ia(None, ses, correccion_usuario="Lista actual: " + datos_previos + ". Modificación solicitada: " + str(m.text))
+            sesiones[chat_id]["filas"] = filas_actualizadas
+            resumen_txt = "✏️ *Lista actualizada:*\n\n" + generar_resumen(filas_actualizadas, ses)
+            enviar_mensaje_segmentado(chat_id, resumen_txt)
+        except Exception as e:
+            bot.reply_to(m, "❌ Error aplicando cambio: " + str(e))
+        return
+
+    # 4. Modo Entrada de Texto Nueva
+    if not ses.get("hotel"):
+        sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
+        
+    cfg = sesiones[chat_id]
+    bot.reply_to(m, "📝 Procesando texto para *" + str(cfg['hotel']) + "*...", parse_mode='Markdown')
+    try:
+        filas = analizar_con_ia([m.text], cfg)
+        sesiones[chat_id]["filas"] = filas
+        resumen_txt = generar_resumen(filas, cfg, 1)
+        enviar_mensaje_segmentado(chat_id, resumen_txt)
+    except Exception as e:
+        bot.reply_to(m, "❌ Error procesando texto: " + str(e))
+
+# ==========================================
+# INICIO DEL SERVICIO
+# ==========================================
+print("🚀 Bot Maestro Lavaarte en línea")
+bot.infinity_polling()
