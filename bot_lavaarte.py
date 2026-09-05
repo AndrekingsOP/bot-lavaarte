@@ -182,6 +182,12 @@ def llamar_gemini_rotativo(contents):
                     continue
     raise ultimo_error
 
+def a_entero(val):
+    try:
+        return int(val)
+    except:
+        return 1
+
 def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None):
     fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
     hotel = config_sesion['hotel']
@@ -190,7 +196,7 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     tipo_op = config_sesion.get('tipo', 'HUESPEDES')
     key = config_sesion.get('key', '')
     
-    es_wyndham = (key == "wyndham_huespedes")
+    es_wyndham_huespedes = (key == "wyndham_huespedes")
     es_hilton = (key == "hilton")
     es_fontana = (key == "fontana")
     es_oceania = (key == "oceania")
@@ -199,31 +205,38 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
 
     prompt = f"""
     Eres el auditor contable oficial de Lavaarte Lavandería SAS.
-    Operación: Hotel '{hotel}', Servicio '{servicio}', Clave: '{key}'.
+    Operación activa: Hotel '{hotel}', Servicio '{servicio}', Clave: '{key}'.
     
     REGLAS ESTRICTAS Y AISLADAS POR HOTEL:
     
-    1. REGLA HILTON:
+    1. REGLA ESTRICTA WYNDHAM HUÉSPEDES (wyndham_huespedes):
+       - ¿Es Wyndham Huéspedes?: {es_wyndham_huespedes}
+       - EXCLUSIÓN TOTAL DE EMPLEADOS: Los empleados pagan de contado en caja diariamente. Si la lista contiene bloques, firmas o nombres propios de personas que son empleados (sin número de habitación de hotel), IGNORA Y DESCARTA POR COMPLETO esos nombres y todas las prendas asociadas a ellos.
+       - PROCESAR ÚNICAMENTE HABITACIONES NUMÉRICAS DE HUÉSPEDES (ej: 204, 315, 501).
+       - PRIORIDAD AL PRIMER ÍTEM LEÍDO: Si una anotación describe una prenda compuesta o ambigua como '1 blusa de pijama', '1 pantalón de sudadera', '1 camisa tipo polo', clasifícala SIEMPRE por el PRIMER sustantivo/prenda mencionado. Ejemplo: 'blusa de pijama' DEBE clasificarse como 'Blusa/Blouse' (código 6) y NUNCA como 'Pijama'.
+       - UNIFICACIÓN Y SUMA DE PRENDAS IDÉNTICAS: Si dentro de una misma habitación anotan prendas iguales separadas por color o detalle (ej: '1 pantalón verde' y '1 pantalón azul'), unifícalas en un solo registro del catálogo base ('Pantalón/Pants', cantidad 2) en lugar de crear líneas separadas.
+
+    2. REGLA HILTON:
        - ¿Es Hilton?: {es_hilton}
-       - Si es Hilton, IGNORA Y DESCARTA cualquier número de remisión (deja remisión vacía o igual a habitación).
-       - DESCARTA Y EXCLUYE a los empleados o uniformes sin habitación asignada. Procesa estrictamente habitaciones de huéspedes.
+       - Ignora cualquier número de remisión.
+       - Descarta y excluye empleados o uniformes sin habitación de huéspedes.
 
-    2. REGLAS FONTANA Y OCEANIA (LENCERÍA HORIZONTAL):
+    3. REGLAS FONTANA Y OCEANIA (LENCERÍA HORIZONTAL):
        - ¿Es Fontana u Oceania?: {es_fontana or es_oceania}
-       - NO confundas ropa de huéspedes con lencería. Todo es Lencería institucional.
-       - Distingue con absoluta precisión entre 'toalla' (estándar), 'toalla tapete' (de piso), 'sábana', 'fundas', 'toalla de mano', etc. No unifiques todo como una sola toalla ni crees ítems fantasma. Respeta los nombres exactos de la matriz horizontal.
+       - Toda la ropa recibida es Lencería institucional.
+       - Distingue con precisión milimétrica entre 'toalla' (estándar), 'toalla tapete' (de piso), 'sábana', 'fundas', 'toalla de mano'. No unifiques todo como una sola toalla ni inventes ítems nuevos.
 
-    3. REGLAS BOGOTÁ PLAZA UNIFORMES / SUITE MANTELERÍA / DANN LENCERÍA:
-       - Si es Bogotá Plaza Uniformes (bogotap_datos): Los textos son compuestos de Cargo + Prenda (ej: 'MESERO(EV) CHAQUETA', 'COCINA DELANTAL', 'CAPITAN CAMISA'). Debes detectar ambos componentes para ubicar la cantidad exacta en la fila correspondiente de la matriz horizontal.
-       - No crees ítems nuevos fuera de la lista estándar de la hoja.
+    4. REGLAS BOGOTÁ PLAZA UNIFORMES / SUITE MANTELERÍA / DANN LENCERÍA:
+       - Si es Bogotá Plaza Uniformes (bogotap_datos): Los textos son compuestos de Cargo + Prenda (ej: 'MESERO(EV) CHAQUETA', 'COCINA DELANTAL', 'CAPITAN CAMISA'). Detecta ambos componentes para ubicar la cantidad exacta en la fila de la matriz horizontal.
+       - Suite Mantelería: Rango estricto de filas 3 a 18. No crear filas abajo.
 
-    4. REGLAS DANN EMPLEADOS:
+    5. REGLAS DANN EMPLEADOS:
        - ¿Es Dann Empleados?: {es_dann_emp}
-       - La persona puede tener un nombre propio (ej: 'Ricardo') o un código asignado compuesto (ej: '13-514'). Asigna dicho identificador en la columna de habitación/persona.
+       - La persona puede tener un nombre propio (ej: 'Ricardo') o un código compuesto (ej: '13-514'). Asigna dicho identificador en la columna de habitación/persona.
        - Cruza correctamente con la lista de precios Norte 2026.
 
-    5. REGLAS GENERALES:
-       - 'remision': Número de remisión (si Hampton lo tiene en Columna B, léelo bien; si Hilton, ignorarlo).
+    6. REGLAS GENERALES:
+       - 'remision': Número de remisión (Hampton en Columna B; Hilton vacío).
        - 'habitacion': Número de habitación, nombre de empleado o código (ej: '13-514').
        - 'extra': 'Sí' o 'No' según recargo.
 
@@ -237,13 +250,13 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
       {{
         "fecha": "{fecha_hoy}",
         "remision": "1234",
-        "habitacion": "504",
-        "codigo": 8,
-        "prenda": "Toalla tapete",
-        "servicio": "Lavado",
+        "habitacion": "402",
+        "codigo": 25,
+        "prenda": "Pantalón/Pants",
+        "servicio": "Lavado en seco",
         "cantidad": 2,
-        "valorUnitario": 5250,
-        "valorTotal": 10500,
+        "valorUnitario": 5950,
+        "valorTotal": 11900,
         "extra": "No",
         "tipo_operacion_detectada": "{tipo_op}"
       }}
@@ -258,7 +271,34 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
         
     texto_raw = llamar_gemini_rotativo(contents)
     texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
-    return json.loads(texto)
+    filas = json.loads(texto)
+
+    # DOBLE FILTRO PROGRAMÁTICO PARA WYNDHAM HUÉSPEDES
+    if es_wyndham_huespedes and isinstance(filas, list):
+        filas_consolidadas = {}
+        for f in filas:
+            hab = str(f.get("habitacion", "")).strip()
+            # Descarta si la habitación no contiene dígitos numéricos (empleados o firmas)
+            if not any(char.isdigit() for char in hab):
+                continue
+            
+            cod = f.get("codigo", 0)
+            extra = f.get("extra", "No")
+            clave_unica = f"{hab}_{cod}_{extra}"
+            cant = a_entero(f.get("cantidad", 1))
+            v_unit = float(f.get("valorUnitario", 0))
+            
+            if clave_unica in filas_consolidadas:
+                filas_consolidadas[clave_unica]["cantidad"] += cant
+                filas_consolidadas[clave_unica]["valorTotal"] = filas_consolidadas[clave_unica]["cantidad"] * v_unit
+            else:
+                f["cantidad"] = cant
+                f["valorTotal"] = cant * v_unit
+                filas_consolidadas[clave_unica] = f
+                
+        return list(filas_consolidadas.values())
+        
+    return filas
 
 def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO"):
     fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
@@ -394,7 +434,7 @@ def menu_post_guardado():
 
 def generar_resumen(filas, config_sesion, total_fotos=1):
     if not filas:
-        return "⚠️ No se detectaron prendas válidas."
+        return "⚠️ No se detectaron prendas válidas para procesar."
     
     hotel_txt = str(config_sesion.get('hotel', '')) + " - " + str(config_sesion.get('servicio', ''))
     fecha_reg = filas[0].get('fecha', datetime.datetime.now().strftime("%d/%m/%Y"))
@@ -648,7 +688,7 @@ def procesar_lote_fotos(chat_id):
 @bot.message_handler(content_types=['photo'])
 def recibir_fotos(message):
     chat_id = message.chat.id
-    if chat_id not in sesiones or not sesiones[chat_id].get("hotel") and sesiones[chat_id].get("modulo") != "FINANCIERO":
+    if chat_id not in sesiones or (not sesiones[chat_id].get("hotel") and sesiones[chat_id].get("modulo") != "FINANCIERO"):
         sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
         
     file_info = bot.get_file(message.photo[-1].file_id)
@@ -668,7 +708,7 @@ def recibir_fotos(message):
 @bot.message_handler(content_types=['voice', 'audio'])
 def recibir_audio(message):
     chat_id = message.chat.id
-    if chat_id not in sesiones or not sesiones[chat_id].get("hotel") and sesiones[chat_id].get("modulo") != "FINANCIERO":
+    if chat_id not in sesiones or (not sesiones[chat_id].get("hotel") and sesiones[chat_id].get("modulo") != "FINANCIERO"):
         sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
         
     cfg = sesiones[chat_id]
@@ -859,41 +899,6 @@ def procesar_texto_general(m):
         bot.reply_to(m, f"✅ Recibe por Lavaarte: *{m.text.strip()}*\n\n📸 *¡Listo!* Ya puedes enviar las fotos de las planillas, notas de voz o texto de la ropa recibida:", parse_mode='Markdown')
         return
 
-    modo = ses.get("modo")
-    if modo == "CONSULTA":
-        bot.reply_to(m, "🔎 Consultando las hojas de cálculo...")
-        try:
-            prompt_clasifica = f"Identifica a cuál clave de servicio pertenece esta consulta ('{m.text}'). Opciones: {list(ARBOL_SERVICIOS.keys())}. Devuelve solo la clave:"
-            clave_hotel = llamar_gemini_rotativo([prompt_clasifica]).strip().replace("`", "").replace("'", "").replace('"', "")
-            cfg = ARBOL_SERVICIOS.get(clave_hotel, ARBOL_SERVICIOS["wyndham_huespedes"])
-            payload = {"accion": "GET_DATOS", "ruta": cfg["ruta"], "destino": cfg["hoja"]}
-            resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=90).json()
-            if resp.get("status") == "SUCCESS":
-                respuesta_ia = interpretar_consulta_ia(m.text, resp.get("datos", []), cfg["hoja"])
-                enviar_mensaje_segmentado(chat_id, respuesta_ia)
-            else:
-                bot.reply_to(m, "⚠️ No fue posible acceder a los datos de la hoja.")
-        except Exception as e:
-            bot.reply_to(m, "❌ Error procesando consulta: " + str(e))
-        return
-
-    if modo == "CORREGIR":
-        bot.reply_to(m, "⚙️ Analizando y aplicando corrección...")
-        try:
-            datos_corr = parsear_correccion_ia(m.text)
-            cfg = ARBOL_SERVICIOS.get(datos_corr.get("hotel_clave"), ARBOL_SERVICIOS["wyndham_huespedes"])
-            payload = {"accion": "CORREGIR_REGISTRO", "ruta": cfg["ruta"], "destino": cfg["hoja"], "tipo_operacion": cfg["tipo"], "correccion": datos_corr}
-            resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=90).json()
-            if resp.get("status") == "SUCCESS":
-                bot.reply_to(m, f"✅ *¡Corrección realizada con éxito!*\n\n🏨 *Hotel:* {cfg['hotel']}\n📋 *Prenda:* {datos_corr.get('prenda')}\n🔢 *Nuevo Valor:* {datos_corr.get('nuevo_valor')}", parse_mode='Markdown')
-                sesiones[chat_id] = {}
-                bot.send_message(chat_id, "Selecciona una nueva opción:", reply_markup=menu_principal())
-            else:
-                bot.reply_to(m, "⚠️ Error: " + str(resp.get("mensaje", "No se encontró el registro a corregir.")))
-        except Exception as e:
-            bot.reply_to(m, "❌ Error aplicando corrección: " + str(e))
-        return
-
     if ses.get("filas"):
         bot.reply_to(m, "⚙️ Aplicando ajustes a la lista...")
         try:
@@ -922,5 +927,5 @@ def procesar_texto_general(m):
 # ==========================================
 # INICIO DEL SERVICIO
 # ==========================================
-print("🚀 Bot Maestro Lavaarte en línea (Reglas Aisladas por Hotel / Zona Horaria Bogotá / Desglose de Entrega)")
+print("🚀 Bot Maestro Lavaarte en línea (Reglas Aisladas por Hotel / Zona Horaria Bogotá / Wyndham Huéspedes Blindado)")
 bot.infinity_polling()
