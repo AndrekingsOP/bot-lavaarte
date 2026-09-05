@@ -44,13 +44,13 @@ ARBOL_SERVICIOS = {
     
     # RUTA NORTE
     "dann_huespedes": {"ruta": "Norte", "hotel": "Dann", "servicio": "Huéspedes", "hoja": "DANN_HUESPEDES_DATOS", "tipo": "HUESPEDES", "base_defecto": "DANN HUÉSPEDES"},
-    "dann_empleados": {"ruta": "Norte", "hotel": "Dann", "servicio": "Empleados", "hoja": "DANN_EMPLEADOS_DATOS", "tipo": "HUESPEDES", "base_defecto": "DANN EMPLEADOS"},
-    "dann_lenceria": {"ruta": "Norte", "hotel": "Dann", "servicio": "Lencería", "hoja": "DANN_LENCERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "DANN LENCERÍA"},
+    "dann_empleados": {"ruta": "Norte", "hotel": "Dann", "servicio": "Empleados / Códigos", "hoja": "DANN_EMPLEADOS_DATOS", "tipo": "HUESPEDES", "base_defecto": "DANN EMPLEADOS"},
+    "dann_lenceria": {"ruta": "Norte", "hotel": "Dann", "servicio": "Lencería Horizontal", "hoja": "DANN_LENCERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "DANN LENCERÍA"},
     "suite": {"ruta": "Norte", "hotel": "Suite", "servicio": "General", "hoja": "SUITE_DATOS", "tipo": "HUESPEDES", "base_defecto": "SUITE HUÉSPEDES"},
-    "suite_manteleria": {"ruta": "Norte", "hotel": "Suite", "servicio": "Mantelería", "hoja": "SUITE_MANTELERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "SUITE MANTELERÍA"},
+    "suite_manteleria": {"ruta": "Norte", "hotel": "Suite", "servicio": "Mantelería (Fila 3-18)", "hoja": "SUITE_MANTELERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "SUITE MANTELERÍA"},
     "virrey": {"ruta": "Norte", "hotel": "Virrey", "servicio": "General", "hoja": "VIRREY_DATOS", "tipo": "HUESPEDES", "base_defecto": "VIRREY HUÉSPEDES"},
     "andes_plaza": {"ruta": "Norte", "hotel": "Andes Plaza", "servicio": "General", "hoja": "ANDES_PLAZA_DATOS", "tipo": "HUESPEDES", "base_defecto": "ANDES PLAZA HUÉSPEDES"},
-    "bogotap_datos": {"ruta": "Norte", "hotel": "Bogotá Plaza", "servicio": "Uniformes", "hoja": "BOGOTAP_DATOS", "tipo": "HUESPEDES", "base_defecto": "BOGOTÁ PLAZA UNIFORMES"},
+    "bogotap_datos": {"ruta": "Norte", "hotel": "Bogotá Plaza", "servicio": "Uniformes (Cargo + Prenda)", "hoja": "BOGOTAP_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "BOGOTÁ PLAZA UNIFORMES"},
     "bogotap_huespedes": {"ruta": "Norte", "hotel": "Bogotá Plaza", "servicio": "Huéspedes/Empleados", "hoja": "BOGOTAP_HUESPEDES_DATOS", "tipo": "HUESPEDES", "base_defecto": "BOGOTÁ PLAZA HUÉSPEDES"},
     "eficacia": {"ruta": "Norte", "hotel": "Eficacia", "servicio": "Dotaciones", "hoja": "EFICACIA_DATOS", "tipo": "MATRIZ_FILAS_CLIENTE", "base_defecto": "EFICACIA DOTACIONES"}
 }
@@ -132,9 +132,9 @@ CATALOGO_GLOBAL = """
 35|Pijama|Lavado|11400
 36|Ruana|Lavado en seco|15860
 37|Smoking / Tuxedo|Lavado en seco|26350
-38|Sudadera/Sweatshirt|Lavado en seco|11799
+38|Sudadera/Sweatshirt|Lavado|11799
 39|Suéter/Sweter|Lavado|10944
-40|Traje/Suit|Lavado en seco|19836
+40|Traje/Suit|Lavado in seco|19836
 41|Vestido Dama Corto|Lavado en seco|25000
 42|Vestido Dama Largo|Lavado en seco|59500
 43|vestido de baño/Bathing dress|Lavado|12198
@@ -188,48 +188,44 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     servicio = config_sesion['servicio']
     ruta = config_sesion.get('ruta', 'Oriente')
     tipo_op = config_sesion.get('tipo', 'HUESPEDES')
-    es_wyndham = (config_sesion.get('key') == "wyndham_huespedes")
-    es_eficacia = (config_sesion.get('key') == "eficacia")
+    key = config_sesion.get('key', '')
+    
+    es_wyndham = (key == "wyndham_huespedes")
+    es_hilton = (key == "hilton")
+    es_fontana = (key == "fontana")
+    es_oceania = (key == "oceania")
+    es_bogotap_datos = (key == "bogotap_datos")
+    es_dann_emp = (key == "dann_empleados")
 
     prompt = f"""
     Eres el auditor contable oficial de Lavaarte Lavandería SAS.
-    Operación: Hotel '{hotel}', Servicio '{servicio}', Ruta: '{ruta}', Tipo: '{tipo_op}'.
+    Operación: Hotel '{hotel}', Servicio '{servicio}', Clave: '{key}'.
     
-    CRITERIOS DE EXTRACCIÓN Y MAPEO:
-    1. EXCLUSIÓN DE EMPLEADOS (SOLO PARA WYNDHAM HUÉSPEDES):
-       - ¿Es Wyndham Huéspedes?: {es_wyndham}
-       - SI ES WYNDHAM HUÉSPEDES: Procesa ÚNICAMENTE habitaciones de huéspedes. DESCARTA prendas de empleados o uniformes sin habitación.
-       - PARA HOTELES DE RUTA NORTE Y DEMÁS HOTELES: Procesa TANTO habitaciones de huéspedes COMO empleados/uniformes.
+    REGLAS ESTRICTAS Y AISLADAS POR HOTEL:
+    
+    1. REGLA HILTON:
+       - ¿Es Hilton?: {es_hilton}
+       - Si es Hilton, IGNORA Y DESCARTA cualquier número de remisión (deja remisión vacía o igual a habitación).
+       - DESCARTA Y EXCLUYE a los empleados o uniformes sin habitación asignada. Procesa estrictamente habitaciones de huéspedes.
 
-    2. REGLAS ESTRICTAS DE CLASIFICACIÓN DE PRENDAS:
-       - CAMISETA vs CAMISETA SPORT:
-         * Si dice 'Camiseta' (a secas, sin la palabra sport) -> 'Camiseta/T Shirt' (Código 10 / Tarifa básica).
-         * Solo si dice EXPLÍCITAMENTE 'Camiseta Sport' o 'Sport' al lado de camiseta -> 'Camiseta Sport' (Código 9 / Tarifa sport).
-       - LICRAS / LEGGINGS: Se cobran y clasifican como 'Pantalón/Pants' (Código 25 / 31).
-       - TOPS: Se cobran y clasifican como 'Brassiere/Brassiere' (Código 4 / 8).
-       - PANTALÓN DE SUDADERA / DEPORTIVO: Asignar a 'Pantalón/Pants' (Código 25 / 31).
+    2. REGLAS FONTANA Y OCEANIA (LENCERÍA HORIZONTAL):
+       - ¿Es Fontana u Oceania?: {es_fontana or es_oceania}
+       - NO confundas ropa de huéspedes con lencería. Todo es Lencería institucional.
+       - Distingue con absoluta precisión entre 'toalla' (estándar), 'toalla tapete' (de piso), 'sábana', 'fundas', 'toalla de mano', etc. No unifiques todo como una sola toalla ni crees ítems fantasma. Respeta los nombres exactos de la matriz horizontal.
 
-    3. CASO EFICACIA (AGRUPACIÓN POR EMPRESA):
-       - ¿Es Eficacia?: {es_eficacia}
-       - Si es Eficacia, 'habitacion' = NOMBRE EXACTO DE LA EMPRESA (ej: 'MONDELEZ', 'ALPINA', 'ÉXITO', 'PAYJOY', 'TIGO').
-       - Prenda = Nombre de la prenda.
+    3. REGLAS BOGOTÁ PLAZA UNIFORMES / SUITE MANTELERÍA / DANN LENCERÍA:
+       - Si es Bogotá Plaza Uniformes (bogotap_datos): Los textos son compuestos de Cargo + Prenda (ej: 'MESERO(EV) CHAQUETA', 'COCINA DELANTAL', 'CAPITAN CAMISA'). Debes detectar ambos componentes para ubicar la cantidad exacta en la fila correspondiente de la matriz horizontal.
+       - No crees ítems nuevos fuera de la lista estándar de la hoja.
 
-    4. REMISIÓN Y HABITACIÓN:
-       - 'remision': Número de remisión o consecutivo (si no hay, coloca el número de habitación).
-       - 'habitacion': Número de habitación (ej: '504', '1165') o nombre del empleado/empresa.
+    4. REGLAS DANN EMPLEADOS:
+       - ¿Es Dann Empleados?: {es_dann_emp}
+       - La persona puede tener un nombre propio (ej: 'Ricardo') o un código asignado compuesto (ej: '13-514'). Asigna dicho identificador en la columna de habitación/persona.
+       - Cruza correctamente con la lista de precios Norte 2026.
 
-    5. CÓDIGOS DE CATÁLOGO:
-       - 'codigo': ID numérico de catálogo de la prenda según la lista de abajo. NUNCA coloques el número de habitación en 'codigo'.
-
-    6. COLUMNA EXTRA (+50% RECARGO):
-       - Si el comprobante o usuario indica 'EXTRA', 'URGENTE', 'EXPRESS':
-         * 'extra' = 'Sí'
-         * 'valorUnitario' = Tarifa Base * 1.50
-         * 'valorTotal' = Cantidad * (Tarifa Base * 1.50)
-       - Si NO dice extra:
-         * 'extra' = 'No'
-         * 'valorUnitario' = Tarifa Base
-         * 'valorTotal' = Cantidad * Tarifa Base
+    5. REGLAS GENERALES:
+       - 'remision': Número de remisión (si Hampton lo tiene en Columna B, léelo bien; si Hilton, ignorarlo).
+       - 'habitacion': Número de habitación, nombre de empleado o código (ej: '13-514').
+       - 'extra': 'Sí' o 'No' según recargo.
 
     CATÁLOGO DE REFERENCIA:
     {CATALOGO_GLOBAL}
@@ -243,11 +239,11 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
         "remision": "1234",
         "habitacion": "504",
         "codigo": 8,
-        "prenda": "Camisa/Dress Shirt",
+        "prenda": "Toalla tapete",
         "servicio": "Lavado",
-        "cantidad": 1,
-        "valorUnitario": 5950,
-        "valorTotal": 5950,
+        "cantidad": 2,
+        "valorUnitario": 5250,
+        "valorTotal": 10500,
         "extra": "No",
         "tipo_operacion_detectada": "{tipo_op}"
       }}
@@ -269,37 +265,19 @@ def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO"):
     prompt = f"""
     Eres el asistente contable financiero de Lavaarte Lavandería SAS.
     Analiza el comprobante, factura, recibo, audio o texto financiero recibido.
-    
-    Tipo de movimiento predeterminado: {tipo_forzado} (EGRESO = Gasto/Compra, INGRESO = Cobro/Entrada de dinero).
-    
-    Categorías disponibles para EGRESO:
-    - Combustible (Gasolina, ACPM)
-    - Insumos Químicos (Detergentes, suavizantes, cloro, desmanchadores)
-    - Mantenimiento (Mecánica furgón, llantas, cambio aceite, repuestos lavadoras/secadoras)
-    - Servicios Públicos (Enel, Gas Natural, Acueducto)
-    - Nómina / Viáticos (Almuerzos, peajes, pagos a colaboradores)
-    - Papelería (Planillas, ganchos, bolsas plásticas)
-    - Arriendo (Local, planta)
-    - Otros Gastos
-    
-    Categorías disponibles para INGRESO:
-    - Facturación Hoteles
-    - Servicios Mostrador
-    - Dotaciones Corporativas
-    - Otros Ingresos
-    
+    Tipo de movimiento: {tipo_forzado}.
     Devuelve EXCLUSIVAMENTE un JSON con:
     {{
       "fecha": "{fecha_hoy}",
       "tipo": "{tipo_forzado}",
-      "categoria": "Categoría exacta",
-      "concepto": "Descripción clara del gasto o ingreso",
-      "tercero": "Proveedor o Cliente (ej: Estación Terpel, Químicos del Valle, Hotel Wyndham)",
+      "categoria": "Combustible / Insumos Químicos / Mantenimiento / Servicios Públicos / Nómina / Papelería / Arriendo / Facturación Hoteles / Servicios Mostrador / Otros",
+      "concepto": "Descripción clara",
+      "tercero": "Proveedor o Cliente",
       "metodo_pago": "Efectivo / Transferencia Bancolombia / Nequi / Daviplata",
-      "responsable": "Nombre de quién realizó el movimiento o conductor",
+      "responsable": "Nombre",
       "valor": 120000,
       "estado": "PAGADO / CONCILIADO",
-      "observaciones": "Detalle extra si aplica"
+      "observaciones": ""
     }}
     """
     contents = [prompt]
@@ -307,7 +285,6 @@ def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO"):
         contents.extend(contenido_multimodal)
     elif contenido_multimodal is not None:
         contents.append(contenido_multimodal)
-        
     texto_raw = llamar_gemini_rotativo(contents)
     texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
     return json.loads(texto)
@@ -317,7 +294,6 @@ def enviar_mensaje_segmentado(chat_id, texto, reply_markup=None):
     if len(texto) <= MAX_CHARS:
         bot.send_message(chat_id, texto, reply_markup=reply_markup, parse_mode='Markdown')
         return
-
     partes = []
     lineas = texto.split('\n')
     bloque = ""
@@ -329,7 +305,6 @@ def enviar_mensaje_segmentado(chat_id, texto, reply_markup=None):
             bloque += l + "\n"
     if bloque:
         partes.append(bloque)
-
     for i, p in enumerate(partes):
         markup = reply_markup if i == len(partes) - 1 else None
         bot.send_message(chat_id, p, reply_markup=markup, parse_mode='Markdown')
@@ -345,7 +320,6 @@ def menu_principal():
         InlineKeyboardButton("🔍 Auditoría / Consultas IA", callback_data="modo_consulta"),
         InlineKeyboardButton("✏️ Corregir Registro", callback_data="modo_corregir")
     )
-    # BOTÓN ANCHO INFERIOR PARA CONTROL FINANCIERO
     markup.add(
         InlineKeyboardButton("💸 Control Financiero (Gastos / Ingresos)", callback_data="menu_financiero")
     )
@@ -379,7 +353,7 @@ def menu_hoteles_norte():
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(
         InlineKeyboardButton("👔 Dann Huéspedes", callback_data="sel_dann_huespedes"),
-        InlineKeyboardButton("👤 Dann Empleados", callback_data="sel_dann_empleados"),
+        InlineKeyboardButton("👤 Dann Empleados / Códigos", callback_data="sel_dann_empleados"),
         InlineKeyboardButton("🛏️ Dann Lencería", callback_data="sel_dann_lenceria"),
         InlineKeyboardButton("🏨 Hotel Suite", callback_data="sel_suite"),
         InlineKeyboardButton("🍽️ Suite Mantelería", callback_data="sel_suite_manteleria"),
@@ -514,7 +488,6 @@ def manejar_menu_principal(call):
         sesiones[chat_id] = {"modulo": "FINANCIERO"}
         bot.edit_message_text("💸 *MÓDULO DE CONTROL FINANCIERO LAVAARTE*\n\n¿Qué tipo de movimiento deseas registrar?", chat_id, call.message.message_id, reply_markup=menu_financiero(), parse_mode='Markdown')
 
-# --- SUBMÓDULO FINANCIERO ---
 @bot.callback_query_handler(func=lambda call: call.data in ['fin_egreso', 'fin_ingreso'])
 def seleccionar_tipo_financiero(call):
     chat_id = call.message.chat.id
@@ -552,7 +525,6 @@ def seleccionar_hotel(call):
         parse_mode='Markdown'
     )
 
-# --- FLUJO ENTREGA ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mov_entregar_'))
 def manejar_opciones_entrega(call):
     key = call.data.replace('mov_entregar_', '')
@@ -591,18 +563,18 @@ def iniciar_confirmacion_hotel(call):
             sesiones[chat_id]["despacho_pendiente"] = desp
             sesiones[chat_id]["paso_custodia"] = "CONFIRMAR_QUIEN_RECIBE_HOTEL"
             
-            txt_info = "📋 *DESPACHO ENCONTRADO EN SISTEMA:*\n\n"
+            txt_info = "📋 *DESPACHO DETALLADO ENCONTRADO EN SISTEMA:*\n\n"
             txt_info += "📅 *Fecha Despacho:* " + str(desp.get("fecha")) + " (" + str(desp.get("hora")) + ")\n"
-            txt_info += "👤 *Despachado en Planta por:* " + str(desp.get("despachado_por")) + "\n"
-            txt_info += "📊 *Total Prendas a Entregar:* *" + str(desp.get("total_prendas")) + "*\n\n"
+            txt_info += "👤 *Despachado por:* " + str(desp.get("despachado_por")) + "\n"
+            txt_info += "📊 *Total Prendas:* *" + str(desp.get("total_prendas")) + "*\n"
+            txt_info += "📝 *Detalle:* " + str(desp.get("notas", "N/A")) + "\n\n"
             txt_info += "✍️ *Por favor escribe el nombre de la persona que recibe en el hotel (Nombre y cargo):*"
             bot.send_message(chat_id, txt_info, parse_mode='Markdown')
         else:
-            bot.send_message(chat_id, "⚠️ No hay un despacho pendiente registrado en planta para *" + str(hotel_nom) + "*.\n\nPuedes cargarlo seleccionando la opción 1 (Cargar Despacho en Planta).", parse_mode='Markdown')
+            bot.send_message(chat_id, "⚠️ No hay un despacho pendiente registrado en planta para *" + str(hotel_nom) + "*.", parse_mode='Markdown')
     except Exception as e:
         bot.send_message(chat_id, "❌ Error consultando: " + str(e))
 
-# --- FLUJO RECEPCIÓN ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mov_recibir_'))
 def iniciar_recepcion(call):
     chat_id = call.message.chat.id
@@ -631,16 +603,14 @@ def procesar_lote_fotos(chat_id):
         imgs = list(cola_fotos[chat_id])
         cola_fotos[chat_id] = []
         if chat_id in timers:
-            del timers[chat_id]
+            timers[chat_id].cancel()
             
     cfg = sesiones.get(chat_id, ARBOL_SERVICIOS["wyndham_huespedes"])
     
-    # 1. Caso Financiero con Foto
     if cfg.get("modulo") == "FINANCIERO":
         bot.send_message(chat_id, "🧾 Analizando comprobante financiero con IA...", parse_mode='Markdown')
         try:
             img_obj = imgs[0]
-            # Convertir a base64 para subir a Drive
             buffer_io = io.BytesIO()
             img_obj.save(buffer_io, format="JPEG", quality=85)
             b64_str = base64.b64encode(buffer_io.getvalue()).decode('utf-8')
@@ -658,16 +628,14 @@ def procesar_lote_fotos(chat_id):
             resumen_fin += f"🏢 *Tercero / Proveedor:* {datos_fin.get('tercero')}\n"
             resumen_fin += f"💳 *Método de Pago:* {datos_fin.get('metodo_pago')}\n"
             resumen_fin += f"👤 *Responsable:* {datos_fin.get('responsable')}\n"
-            resumen_fin += f"💰 *Valor:* *${val_fmt}*\n"
-            resumen_fin += f"📸 *Evidencia:* Se guardará copia en Google Drive.\n\n"
+            resumen_fin += f"💰 *Valor:* *${val_fmt}*\n\n"
             resumen_fin += "💬 Escribe *SI* para registrar en Sheets o *NO* para cancelar."
             bot.send_message(chat_id, resumen_fin, parse_mode='Markdown')
         except Exception as e:
             bot.send_message(chat_id, "❌ Error analizando comprobante: " + str(e))
         return
 
-    # 2. Caso Operación Hotel
-    bot.send_message(chat_id, "🔍 Procesando " + str(len(imgs)) + " foto(s)...", parse_mode='Markdown')
+    bot.send_message(chat_id, "🔍 Procesando " + str(len(imgs)) + " foto(s) con reglas específicas de hotel...", parse_mode='Markdown')
     try:
         filas = analizar_con_ia(imgs, cfg)
         sesiones[chat_id]["filas"] = filas
@@ -741,7 +709,6 @@ def confirmar_guardado(m):
     chat_id = m.chat.id
     ses = sesiones.get(chat_id, {})
     
-    # 1. Guardar Movimiento Financiero
     if ses.get("movimiento_fin_pendiente"):
         m_fin = ses["movimiento_fin_pendiente"]
         bot.reply_to(m, "⏳ Guardando en el libro contable...", parse_mode='Markdown')
@@ -752,8 +719,7 @@ def confirmar_guardado(m):
             }
             resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=45).json()
             if resp.get("status") == "SUCCESS":
-                txt_ok = f"✅ *¡Movimiento registrado con éxito!*\n\n"
-                txt_ok += f"📑 Guardado en pestaña: *{resp.get('hoja')}*\n"
+                txt_ok = f"✅ *¡Movimiento registrado con éxito!*\n\n📑 Guardado en pestaña: *{resp.get('hoja')}*\n"
                 if resp.get("url_evidencia"):
                     txt_ok += f"📸 Evidencia fotográfica guardada en Google Drive.\n"
                 bot.send_message(chat_id, txt_ok, parse_mode='Markdown')
@@ -765,13 +731,12 @@ def confirmar_guardado(m):
             bot.reply_to(m, "❌ Error registrando financiero: " + str(e))
         return
 
-    # 2. Guardar Operación Hotel
     if ses.get("filas"):
         cfg = ses
         filas = cfg["filas"]
         tipo_op = filas[0].get("tipo_operacion_detectada", cfg.get("tipo", "HUESPEDES"))
         
-        bot.reply_to(m, "⏳ Guardando datos y registrando custodia en *" + str(cfg['hoja']) + "*...", parse_mode='Markdown')
+        bot.reply_to(m, "⏳ Guardando datos y registrando custodia (con hora de Bogotá)...", parse_mode='Markdown')
         try:
             dia_actual = datetime.datetime.now().day
             if filas and filas[0].get('fecha'):
@@ -797,7 +762,7 @@ def confirmar_guardado(m):
             
             if resp.status_code == 200 and data_resp.get("status") == "SUCCESS":
                 hoja_dest = data_resp.get("hoja_guardada", cfg['hotel'])
-                bot.reply_to(m, "✅ *¡Datos guardados con éxito!*\n📋 Registrado en: `" + str(hoja_dest) + "`\n⏱️ Auditoría generada en `TIEMPOS` y `RECEPCION_ENTREGA`.", parse_mode='Markdown')
+                bot.reply_to(m, "✅ *¡Datos guardados con éxito!*\n📋 Registrado en: `" + str(hoja_dest) + "`\n⏱️ Auditoría generada en `TIEMPOS` y `RECEPCION_ENTREGA` (Hora Colombia OK).", parse_mode='Markdown')
                 sesiones[chat_id]["filas"] = []
                 bot.send_message(chat_id, "¿Qué deseas hacer a continuación?", reply_markup=menu_post_guardado())
             else:
@@ -821,7 +786,6 @@ def procesar_texto_general(m):
     ses = sesiones.get(chat_id, {})
     paso = ses.get("paso_custodia")
     
-    # 1. Flujo Financiero por Texto
     if ses.get("modulo") == "FINANCIERO":
         tipo_mov = ses.get("tipo_fin", "EGRESO")
         bot.reply_to(m, "🧾 Analizando movimiento con IA...", parse_mode='Markdown')
@@ -843,7 +807,6 @@ def procesar_texto_general(m):
             bot.reply_to(m, "❌ Error analizando texto financiero: " + str(e))
         return
 
-    # 2. Flujo Custodia Hoteles
     if paso == "RESP_LAVAARTE_DESPACHO":
         ses["resp_lavaarte"] = m.text.strip()
         ses["resp_hotel"] = "Por entregar en hotel"
@@ -854,7 +817,7 @@ def procesar_texto_general(m):
     if paso == "CONFIRMAR_QUIEN_RECIBE_HOTEL":
         quien_recibe = m.text.strip()
         desp = ses.get("despacho_pendiente", {})
-        bot.reply_to(m, "⏳ Confirmando entrega en Google Sheets...")
+        bot.reply_to(m, "⏳ Confirmando entrega detallada en Google Sheets...")
         try:
             payload = {
                 "accion": "CONFIRMAR_ENTREGA_HOTEL",
@@ -863,7 +826,8 @@ def procesar_texto_general(m):
                 "fila_despacho": desp.get("fila"),
                 "total_prendas": desp.get("total_prendas", 0),
                 "responsable_lavaarte": desp.get("despachado_por", "Conductor"),
-                "responsable_hotel": quien_recibe
+                "responsable_hotel": quien_recibe,
+                "detalle_resumen": f"Entregado a {quien_recibe}. Total prendas: {desp.get('total_prendas')}."
             }
             resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=40).json()
             if resp.get("status") == "SUCCESS":
@@ -871,9 +835,9 @@ def procesar_texto_general(m):
                 txt_ok += f"🏨 *Hotel:* {ses.get('hotel')}\n"
                 txt_ok += f"👤 *Entregado por:* {desp.get('despachado_por')}\n"
                 txt_ok += f"✍️ *Recibido por:* {quien_recibe}\n"
-                txt_ok += f"📊 *Prendas:* {desp.get('total_prendas')}\n"
-                txt_ok += f"⏱️ *Hora sellada:* {datetime.datetime.now().strftime('%I:%M %p')}\n\n"
-                txt_ok += "Guardado en `RECEPCION_ENTREGA` y `TIEMPOS`."
+                txt_ok += f"📊 *Prendas entregadas:* {desp.get('total_prendas')}\n"
+                txt_ok += f"⏱️ *Hora sellada (Bogotá):* {datetime.datetime.now().strftime('%I:%M %p')}\n\n"
+                txt_ok += "Guardado en `RECEPCION_ENTREGA` y `TIEMPOS` con detalle completo."
                 bot.send_message(chat_id, txt_ok, parse_mode='Markdown')
                 sesiones[chat_id] = {}
                 bot.send_message(chat_id, "Selecciona una nueva opción:", reply_markup=menu_principal())
@@ -895,7 +859,6 @@ def procesar_texto_general(m):
         bot.reply_to(m, f"✅ Recibe por Lavaarte: *{m.text.strip()}*\n\n📸 *¡Listo!* Ya puedes enviar las fotos de las planillas, notas de voz o texto de la ropa recibida:", parse_mode='Markdown')
         return
 
-    # 3. Flujos Habituales de Consulta, Corrección o Entrada de Ropa
     modo = ses.get("modo")
     if modo == "CONSULTA":
         bot.reply_to(m, "🔎 Consultando las hojas de cálculo...")
@@ -947,7 +910,7 @@ def procesar_texto_general(m):
         sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
         
     cfg = sesiones[chat_id]
-    bot.reply_to(m, "📝 Procesando texto para *" + str(cfg['hotel']) + "*...", parse_mode='Markdown')
+    bot.reply_to(m, "📝 Procesando texto para *" + str(cfg['hotel']) + "* con reglas específicas...", parse_mode='Markdown')
     try:
         filas = analizar_con_ia([m.text], cfg)
         sesiones[chat_id]["filas"] = filas
@@ -959,5 +922,5 @@ def procesar_texto_general(m):
 # ==========================================
 # INICIO DEL SERVICIO
 # ==========================================
-print("🚀 Bot Maestro Lavaarte en línea (Control Financiero Integrado / Evidencias en Drive)")
+print("🚀 Bot Maestro Lavaarte en línea (Reglas Aisladas por Hotel / Zona Horaria Bogotá / Desglose de Entrega)")
 bot.infinity_polling()
