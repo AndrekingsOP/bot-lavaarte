@@ -14,6 +14,7 @@ from google.genai import types
 TOKEN = '8816786492:AAEb6VgZzP07JJ9MegbVjiItuS-oopL5728'
 GEMINI_API_KEY = 'AQ.Ab8RN6KHh9xczXiYb-Bm2DSL1Q8zsTyd695lbn3CF74Qc4OzGg'
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxqnfe5kd_b0gB50r0IKw69pkRdsYq4vEHLIpwpRZpDYeTMq5TvWVCnsstm7Tj2W0we/exec'
+URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe1mA8h7iyMblV5ZhGCZG4PggzCppAt8T5Y79t-j_Rt7Pe95lcuQ9-6Fg/exec'
 
 bot = telebot.TeleBot(TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -278,7 +279,6 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
         filas_consolidadas = {}
         for f in filas:
             hab = str(f.get("habitacion", "")).strip()
-            # Descarta si la habitación no contiene dígitos numéricos (empleados o firmas)
             if not any(char.isdigit() for char in hab):
                 continue
             
@@ -300,26 +300,45 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
         
     return filas
 
-def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO"):
+def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO", cuenta_destino="LAVAARTE"):
     fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
-    prompt = f"""
-    Eres el asistente contable financiero de Lavaarte Lavandería SAS.
-    Analiza el comprobante, factura, recibo, audio o texto financiero recibido.
-    Tipo de movimiento: {tipo_forzado}.
-    Devuelve EXCLUSIVAMENTE un JSON con:
-    {{
-      "fecha": "{fecha_hoy}",
-      "tipo": "{tipo_forzado}",
-      "categoria": "Combustible / Insumos Químicos / Mantenimiento / Servicios Públicos / Nómina / Papelería / Arriendo / Facturación Hoteles / Servicios Mostrador / Otros",
-      "concepto": "Descripción clara",
-      "tercero": "Proveedor o Cliente",
-      "metodo_pago": "Efectivo / Transferencia Bancolombia / Nequi / Daviplata",
-      "responsable": "Nombre",
-      "valor": 120000,
-      "estado": "PAGADO / CONCILIADO",
-      "observaciones": ""
-    }}
-    """
+    
+    if cuenta_destino == "CARLOS":
+        prompt = f"""
+        Eres el asistente financiero personal de Carlos Andrés Suárez.
+        Analiza el comprobante, factura, recibo, audio o texto financiero de GASTO O INGRESO PERSONAL.
+        Tipo de movimiento: {tipo_forzado}.
+        Categorías sugeridas: Alimentación, Transporte, Deporte / Ciclismo, Ocio / Cine, Hogar / Servicios, Salud, Ropa, Ahorro / Inversión, Otros.
+        Devuelve EXCLUSIVAMENTE un JSON con:
+        {{
+          "fecha": "{fecha_hoy}",
+          "tipo": "{tipo_forzado}",
+          "categoria": "Alimentación / Transporte / Deporte / etc.",
+          "concepto": "Descripción concisa del gasto o ingreso",
+          "metodo_pago": "Efectivo / Nequi / Daviplata / Tarjeta Débito / Tarjeta Crédito / Transferencia",
+          "valor": 50000
+        }}
+        """
+    else:
+        prompt = f"""
+        Eres el asistente contable financiero de Lavaarte Lavandería SAS.
+        Analiza el comprobante, factura, recibo, audio o texto financiero recibido.
+        Tipo de movimiento: {tipo_forzado}.
+        Devuelve EXCLUSIVAMENTE un JSON con:
+        {{
+          "fecha": "{fecha_hoy}",
+          "tipo": "{tipo_forzado}",
+          "categoria": "Combustible / Insumos Químicos / Mantenimiento / Servicios Públicos / Nómina / Papelería / Arriendo / Facturación Hoteles / Servicios Mostrador / Otros",
+          "concepto": "Descripción clara",
+          "tercero": "Proveedor o Cliente",
+          "metodo_pago": "Efectivo / Transferencia Bancolombia / Nequi / Daviplata",
+          "responsable": "Nombre",
+          "valor": 120000,
+          "estado": "PAGADO / CONCILIADO",
+          "observaciones": ""
+        }}
+        """
+        
     contents = [prompt]
     if isinstance(contenido_multimodal, list):
         contents.extend(contenido_multimodal)
@@ -372,6 +391,15 @@ def menu_financiero():
         InlineKeyboardButton("🟢 Registrar Ingreso", callback_data="fin_ingreso")
     )
     markup.add(InlineKeyboardButton("⬅️ Volver al Menú Principal", callback_data="menu_inicio"))
+    return markup
+
+def menu_destino_cuenta(tipo_mov):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("👔 Lavaarte SAS", callback_data=f"cta_lavaarte_{tipo_mov}"),
+        InlineKeyboardButton("👤 Personal Carlos", callback_data=f"cta_carlos_{tipo_mov}")
+    )
+    markup.add(InlineKeyboardButton("⬅️ Cancelar", callback_data="menu_financiero"))
     return markup
 
 def menu_hoteles_oriente():
@@ -526,24 +554,42 @@ def manejar_menu_principal(call):
         bot.edit_message_text("✏️ *MODO CORRECCIÓN DE REGISTRO*\n\nEscribe el ajuste que deseas realizar de forma explícita.", chat_id, call.message.message_id, parse_mode='Markdown')
     elif call.data == 'menu_financiero':
         sesiones[chat_id] = {"modulo": "FINANCIERO"}
-        bot.edit_message_text("💸 *MÓDULO DE CONTROL FINANCIERO LAVAARTE*\n\n¿Qué tipo de movimiento deseas registrar?", chat_id, call.message.message_id, reply_markup=menu_financiero(), parse_mode='Markdown')
+        bot.edit_message_text("💸 *MÓDULO DE CONTROL FINANCIERO*\n\n¿Qué tipo de movimiento deseas registrar?", chat_id, call.message.message_id, reply_markup=menu_financiero(), parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data in ['fin_egreso', 'fin_ingreso'])
 def seleccionar_tipo_financiero(call):
     chat_id = call.message.chat.id
-    es_egreso = (call.data == 'fin_egreso')
-    tipo_str = "EGRESO" if es_egreso else "INGRESO"
-    emoji = "🔴" if es_egreso else "🟢"
+    tipo_str = "EGRESO" if call.data == 'fin_egreso' else "INGRESO"
+    emoji = "🔴" if tipo_str == "EGRESO" else "🟢"
     
+    bot.edit_message_text(
+        f"{emoji} *REGISTRAR {tipo_str}*\n\n¿A qué cuenta corresponde este movimiento?",
+        chat_id,
+        call.message.message_id,
+        reply_markup=menu_destino_cuenta(tipo_str),
+        parse_mode='Markdown'
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('cta_'))
+def seleccionar_cuenta_destino(call):
+    chat_id = call.message.chat.id
+    partes = call.data.split('_')
+    cuenta = "LAVAARTE" if partes[1] == "lavaarte" else "CARLOS"
+    tipo_str = partes[2]
+    emoji = "🔴" if tipo_str == "EGRESO" else "🟢"
+    nombre_cuenta = "👔 Lavaarte SAS" if cuenta == "LAVAARTE" else "👤 Personal Carlos"
+
     sesiones[chat_id] = {
         "modulo": "FINANCIERO",
-        "tipo_fin": tipo_str
+        "tipo_fin": tipo_str,
+        "cuenta_destino": cuenta
     }
+
+    txt = f"{emoji} *{tipo_str} → {nombre_cuenta}*\n\n"
+    txt += "📸 *Puedes enviar:* Foto del recibo o factura.\n"
+    txt += "🎙️ *O enviar:* Nota de voz (ej: _'Pagué 35 mil de almuerzo con Nequi'_).\n"
+    txt += "✍️ *O escribirlo:* Directamente en un mensaje de texto."
     
-    txt = f"{emoji} *REGISTRAR {tipo_str}*\n\n"
-    txt += "📸 *Puedes enviar:* Foto del recibo/factura/ticket (se guardará en Google Drive como soporte).\n"
-    txt += "🎙️ *O enviar:* Nota de voz (ej: _'Pagué 90 mil de gasolina en Terpel con Nequi'_).\n"
-    txt += "✍️ *O escribirlo:* En un mensaje de texto."
     bot.edit_message_text(txt, chat_id, call.message.message_id, parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('sel_'))
@@ -656,18 +702,23 @@ def procesar_lote_fotos(chat_id):
             b64_str = base64.b64encode(buffer_io.getvalue()).decode('utf-8')
             
             tipo_mov = cfg.get("tipo_fin", "EGRESO")
-            datos_fin = analizar_financiero_ia(img_obj, tipo_mov)
+            cuenta = cfg.get("cuenta_destino", "LAVAARTE")
+            datos_fin = analizar_financiero_ia(img_obj, tipo_mov, cuenta)
             datos_fin["foto_base64"] = b64_str
             sesiones[chat_id]["movimiento_fin_pendiente"] = datos_fin
             
             val_fmt = f"{datos_fin.get('valor', 0):,.2f}"
-            resumen_fin = f"📊 *CONFIRMACIÓN DE {tipo_mov}:*\n\n"
+            nombre_cuenta = "👔 Lavaarte SAS" if cuenta == "LAVAARTE" else "👤 Personal Carlos"
+
+            resumen_fin = f"📊 *CONFIRMACIÓN ({nombre_cuenta}):*\n\n"
+            resumen_fin += f"📌 *Tipo:* `{tipo_mov}`\n"
             resumen_fin += f"📅 *Fecha:* `{datos_fin.get('fecha')}`\n"
             resumen_fin += f"🏷️ *Categoría:* *{datos_fin.get('categoria')}*\n"
             resumen_fin += f"📝 *Concepto:* {datos_fin.get('concepto')}\n"
-            resumen_fin += f"🏢 *Tercero / Proveedor:* {datos_fin.get('tercero')}\n"
+            if cuenta == "LAVAARTE":
+                resumen_fin += f"🏢 *Tercero / Proveedor:* {datos_fin.get('tercero', 'N/A')}\n"
+                resumen_fin += f"👤 *Responsable:* {datos_fin.get('responsable', 'N/A')}\n"
             resumen_fin += f"💳 *Método de Pago:* {datos_fin.get('metodo_pago')}\n"
-            resumen_fin += f"👤 *Responsable:* {datos_fin.get('responsable')}\n"
             resumen_fin += f"💰 *Valor:* *${val_fmt}*\n\n"
             resumen_fin += "💬 Escribe *SI* para registrar en Sheets o *NO* para cancelar."
             bot.send_message(chat_id, resumen_fin, parse_mode='Markdown')
@@ -722,16 +773,21 @@ def recibir_audio(message):
         
         if cfg.get("modulo") == "FINANCIERO":
             tipo_mov = cfg.get("tipo_fin", "EGRESO")
-            datos_fin = analizar_financiero_ia(audio_part, tipo_mov)
+            cuenta = cfg.get("cuenta_destino", "LAVAARTE")
+            datos_fin = analizar_financiero_ia(audio_part, tipo_mov, cuenta)
             sesiones[chat_id]["movimiento_fin_pendiente"] = datos_fin
             val_fmt = f"{datos_fin.get('valor', 0):,.2f}"
-            resumen_fin = f"📊 *CONFIRMACIÓN DE {tipo_mov}:*\n\n"
+            nombre_cuenta = "👔 Lavaarte SAS" if cuenta == "LAVAARTE" else "👤 Personal Carlos"
+
+            resumen_fin = f"📊 *CONFIRMACIÓN ({nombre_cuenta}):*\n\n"
+            resumen_fin += f"📌 *Tipo:* `{tipo_mov}`\n"
             resumen_fin += f"📅 *Fecha:* `{datos_fin.get('fecha')}`\n"
             resumen_fin += f"🏷️ *Categoría:* *{datos_fin.get('categoria')}*\n"
             resumen_fin += f"📝 *Concepto:* {datos_fin.get('concepto')}\n"
-            resumen_fin += f"🏢 *Tercero / Proveedor:* {datos_fin.get('tercero')}\n"
+            if cuenta == "LAVAARTE":
+                resumen_fin += f"🏢 *Tercero / Proveedor:* {datos_fin.get('tercero', 'N/A')}\n"
+                resumen_fin += f"👤 *Responsable:* {datos_fin.get('responsable', 'N/A')}\n"
             resumen_fin += f"💳 *Método de Pago:* {datos_fin.get('metodo_pago')}\n"
-            resumen_fin += f"👤 *Responsable:* {datos_fin.get('responsable')}\n"
             resumen_fin += f"💰 *Valor:* *${val_fmt}*\n\n"
             resumen_fin += "💬 Escribe *SI* para registrar en Sheets o *NO* para cancelar."
             bot.send_message(chat_id, resumen_fin, parse_mode='Markdown')
@@ -751,22 +807,46 @@ def confirmar_guardado(m):
     
     if ses.get("movimiento_fin_pendiente"):
         m_fin = ses["movimiento_fin_pendiente"]
+        cuenta = ses.get("cuenta_destino", "LAVAARTE")
         bot.reply_to(m, "⏳ Guardando en el libro contable...", parse_mode='Markdown')
         try:
-            payload = {
-                "accion": "REGISTRAR_FINANCIERO",
-                "movimiento_financiero": m_fin
-            }
-            resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=45).json()
-            if resp.get("status") == "SUCCESS":
-                txt_ok = f"✅ *¡Movimiento registrado con éxito!*\n\n📑 Guardado en pestaña: *{resp.get('hoja')}*\n"
-                if resp.get("url_evidencia"):
-                    txt_ok += f"📸 Evidencia fotográfica guardada en Google Drive.\n"
-                bot.send_message(chat_id, txt_ok, parse_mode='Markdown')
-                sesiones[chat_id] = {}
-                bot.send_message(chat_id, "¿Qué deseas hacer ahora?", reply_markup=menu_principal())
+            if cuenta == "CARLOS":
+                # Guardado en Hoja Personal FINANZAS_CARLOS
+                payload = {
+                    "tipo": m_fin.get("tipo", "GASTO"),
+                    "categoria": m_fin.get("categoria", "Varios"),
+                    "valor": m_fin.get("valor", 0),
+                    "metodo": m_fin.get("metodo_pago", "Transferencia/Nequi"),
+                    "descripcion": m_fin.get("concepto", "")
+                }
+                resp = requests.post(URL_APPS_SCRIPT_CARLOS, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=40).json()
+                if resp.get("status") == "SUCCESS":
+                    val_fmt = f"{m_fin.get('valor', 0):,.2f}"
+                    txt_ok = f"✅ *¡Movimiento personal registrado con éxito!*\n\n"
+                    txt_ok += f"👤 Cuenta: *Personal Carlos*\n"
+                    txt_ok += f"📑 Hoja: *MOVIMIENTOS*\n"
+                    txt_ok += f"💰 Valor: *${val_fmt}*\n"
+                    bot.send_message(chat_id, txt_ok, parse_mode='Markdown')
+                    sesiones[chat_id] = {}
+                    bot.send_message(chat_id, "¿Qué deseas hacer ahora?", reply_markup=menu_principal())
+                else:
+                    bot.reply_to(m, "⚠️ Error Sheets Carlos: " + str(resp.get("mensaje")))
             else:
-                bot.reply_to(m, "⚠️ Error: " + str(resp.get("mensaje")))
+                # Guardado en Hoja de Empresa LAVAARTE
+                payload = {
+                    "accion": "REGISTRAR_FINANCIERO",
+                    "movimiento_financiero": m_fin
+                }
+                resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=45).json()
+                if resp.get("status") == "SUCCESS":
+                    txt_ok = f"✅ *¡Movimiento registrado con éxito!*\n\n📑 Guardado en pestaña: *{resp.get('hoja')}*\n"
+                    if resp.get("url_evidencia"):
+                        txt_ok += f"📸 Evidencia fotográfica guardada en Google Drive.\n"
+                    bot.send_message(chat_id, txt_ok, parse_mode='Markdown')
+                    sesiones[chat_id] = {}
+                    bot.send_message(chat_id, "¿Qué deseas hacer ahora?", reply_markup=menu_principal())
+                else:
+                    bot.reply_to(m, "⚠️ Error: " + str(resp.get("mensaje")))
         except Exception as e:
             bot.reply_to(m, "❌ Error registrando financiero: " + str(e))
         return
@@ -828,18 +908,23 @@ def procesar_texto_general(m):
     
     if ses.get("modulo") == "FINANCIERO":
         tipo_mov = ses.get("tipo_fin", "EGRESO")
+        cuenta = ses.get("cuenta_destino", "LAVAARTE")
         bot.reply_to(m, "🧾 Analizando movimiento con IA...", parse_mode='Markdown')
         try:
-            datos_fin = analizar_financiero_ia(m.text, tipo_mov)
+            datos_fin = analizar_financiero_ia(m.text, tipo_mov, cuenta)
             sesiones[chat_id]["movimiento_fin_pendiente"] = datos_fin
             val_fmt = f"{datos_fin.get('valor', 0):,.2f}"
-            resumen_fin = f"📊 *CONFIRMACIÓN DE {tipo_mov}:*\n\n"
+            nombre_cuenta = "👔 Lavaarte SAS" if cuenta == "LAVAARTE" else "👤 Personal Carlos"
+
+            resumen_fin = f"📊 *CONFIRMACIÓN ({nombre_cuenta}):*\n\n"
+            resumen_fin += f"📌 *Tipo:* `{tipo_mov}`\n"
             resumen_fin += f"📅 *Fecha:* `{datos_fin.get('fecha')}`\n"
             resumen_fin += f"🏷️ *Categoría:* *{datos_fin.get('categoria')}*\n"
             resumen_fin += f"📝 *Concepto:* {datos_fin.get('concepto')}\n"
-            resumen_fin += f"🏢 *Tercero / Proveedor:* {datos_fin.get('tercero')}\n"
+            if cuenta == "LAVAARTE":
+                resumen_fin += f"🏢 *Tercero / Proveedor:* {datos_fin.get('tercero', 'N/A')}\n"
+                resumen_fin += f"👤 *Responsable:* {datos_fin.get('responsable', 'N/A')}\n"
             resumen_fin += f"💳 *Método de Pago:* {datos_fin.get('metodo_pago')}\n"
-            resumen_fin += f"👤 *Responsable:* {datos_fin.get('responsable')}\n"
             resumen_fin += f"💰 *Valor:* *${val_fmt}*\n\n"
             resumen_fin += "💬 Escribe *SI* para registrar en Sheets o *NO* para cancelar."
             bot.send_message(chat_id, resumen_fin, parse_mode='Markdown')
@@ -927,5 +1012,5 @@ def procesar_texto_general(m):
 # ==========================================
 # INICIO DEL SERVICIO
 # ==========================================
-print("🚀 Bot Maestro Lavaarte en línea (Reglas Aisladas por Hotel / Zona Horaria Bogotá / Wyndham Huéspedes Blindado)")
+print("🚀 Bot Maestro Lavaarte en línea (Reglas Aisladas por Hotel / Zona Horaria Bogotá / Wyndham Huéspedes Blindado / Finanzas Duales Lavaarte-Carlos)")
 bot.infinity_polling()
