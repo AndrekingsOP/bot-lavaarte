@@ -7,6 +7,7 @@ import io
 import time
 import threading
 import base64
+import unicodedata
 from PIL import Image
 from google import genai
 from google.genai import types
@@ -164,6 +165,30 @@ CATALOGO_GLOBAL = """
 20|Tennis / Zapato|Lavado|18170
 """
 
+def limpiar_texto_simple(txt):
+    if not txt:
+        return ""
+    txt = unicodedata.normalize('NFD', str(txt))
+    txt = ''.join(c for c in txt if unicodedata.category(c) != 'Mn')
+    return txt.lower().strip()
+
+def homologar_prenda_telegram(nombre_prenda, es_lenceria=False):
+    norm = limpiar_texto_simple(nombre_prenda)
+    
+    # Si contiene la palabra 'cortesia' (con o sin tilde, sola o combinada), SIEMPRE es Sábana cortesía
+    if "cortesia" in norm:
+        return "Sábana cortesía"
+        
+    if es_lenceria:
+        if norm in ["mano", "toalla mano", "toalla de mano"]:
+            return "Toalla mano"
+        if norm in ["cuerpo", "toalla cuerpo", "toalla de cuerpo"]:
+            return "Toalla cuerpo"
+        if norm in ["tapete", "toalla tapete"]:
+            return "Toalla tapete"
+            
+    return nombre_prenda
+
 def llamar_gemini_rotativo(contents):
     ultimo_error = None
     for modelo in MODELOS_ROTACION:
@@ -203,6 +228,7 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     es_oceania = (key == "oceania")
     es_bogotap_datos = (key == "bogotap_datos")
     es_dann_emp = (key == "dann_empleados")
+    es_lenceria_matriz = (tipo_op == "LENCERIA_MATRIZ" or es_fontana or es_oceania)
 
     prompt = f"""
     Eres el auditor contable oficial de Lavaarte Lavandería SAS.
@@ -222,10 +248,11 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
        - Ignora cualquier número de remisión.
        - Descarta y excluye empleados o uniformes sin habitación de huéspedes.
 
-    3. REGLAS FONTANA Y OCEANIA (LENCERÍA HORIZONTAL):
+    3. REGLAS FONTANA Y OCEANIA (LENCERÍA INSTITUCIONAL):
        - ¿Es Fontana u Oceania?: {es_fontana or es_oceania}
        - Toda la ropa recibida es Lencería institucional.
-       - Distingue con precisión milimétrica entre 'toalla' (estándar), 'toalla tapete' (de piso), 'sábana', 'fundas', 'toalla de mano'. No unifiques todo como una sola toalla ni inventes ítems nuevos.
+       - REGLA CORTESÍA OBLIGATORIA: Si el usuario escribe 'cortesía', 'cortesia' o 'toalla cortesia', DEBES clasificar la prenda como 'Sábana cortesía' (NUNCA como toalla cortesía).
+       - REGLA TOALLAS: Clasifica estrictamente como 'Toalla cuerpo', 'Toalla mano' y 'Toalla tapete'. No uses 'Toalla de mano'.
 
     4. REGLAS BOGOTÁ PLAZA UNIFORMES / SUITE MANTELERÍA / DANN LENCERÍA:
        - Si es Bogotá Plaza Uniformes (bogotap_datos): Los textos son compuestos de Cargo + Prenda (ej: 'MESERO(EV) CHAQUETA', 'COCINA DELANTAL', 'CAPITAN CAMISA'). Detecta ambos componentes para ubicar la cantidad exacta en la fila de la matriz horizontal.
@@ -273,6 +300,11 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     texto_raw = llamar_gemini_rotativo(contents)
     texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
     filas = json.loads(texto)
+
+    # POST-PROCESAMIENTO PROGRAMÁTICO DE HOMOLOGACIÓN (FONTANA, OCEANIA Y MATRICES)
+    if isinstance(filas, list):
+        for f in filas:
+            f["prenda"] = homologar_prenda_telegram(f.get("prenda", ""), es_lenceria=es_lenceria_matriz)
 
     # DOBLE FILTRO PROGRAMÁTICO PARA WYNDHAM HUÉSPEDES
     if es_wyndham_huespedes and isinstance(filas, list):
@@ -811,7 +843,6 @@ def confirmar_guardado(m):
         bot.reply_to(m, "⏳ Guardando en el libro contable...", parse_mode='Markdown')
         try:
             if cuenta == "CARLOS":
-                # Guardado en Hoja Personal FINANZAS_CARLOS
                 payload = {
                     "tipo": m_fin.get("tipo", "GASTO"),
                     "categoria": m_fin.get("categoria", "Varios"),
@@ -832,7 +863,6 @@ def confirmar_guardado(m):
                 else:
                     bot.reply_to(m, "⚠️ Error Sheets Carlos: " + str(resp.get("mensaje")))
             else:
-                # Guardado en Hoja de Empresa LAVAARTE
                 payload = {
                     "accion": "REGISTRAR_FINANCIERO",
                     "movimiento_financiero": m_fin
