@@ -46,7 +46,7 @@ ARBOL_SERVICIOS = {
     
     # RUTA NORTE
     "dann_huespedes": {"ruta": "Norte", "hotel": "Dann", "servicio": "Huéspedes", "hoja": "DANN_HUESPEDES_DATOS", "tipo": "HUESPEDES", "base_defecto": "DANN HUÉSPEDES"},
-    "dann_empleados": {"ruta": "Norte", "hotel": "Dann", "servicio": "Empleados / Códigos", "hoja": "DANN_EMPLEADOS_DATOS", "tipo": "HUESPEDES", "base_defecto": "DANN EMPLEADOS"},
+    "dann_empleados": {"ruta": "Norte", "hotel": "Dann", "servicio": "Empleados / Códigos", "hoja": "DANN_EMPLEADOS_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "DANN EMPLEADOS"},
     "dann_lenceria": {"ruta": "Norte", "hotel": "Dann", "servicio": "Lencería Horizontal", "hoja": "DANN_LENCERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "DANN LENCERÍA"},
     "suite": {"ruta": "Norte", "hotel": "Suite", "servicio": "General", "hoja": "SUITE_DATOS", "tipo": "HUESPEDES", "base_defecto": "SUITE HUÉSPEDES"},
     "suite_manteleria": {"ruta": "Norte", "hotel": "Suite", "servicio": "Mantelería (Fila 3-18)", "hoja": "SUITE_MANTELERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "SUITE MANTELERÍA"},
@@ -174,11 +174,8 @@ def limpiar_texto_simple(txt):
 
 def homologar_prenda_telegram(nombre_prenda, es_lenceria=False):
     norm = limpiar_texto_simple(nombre_prenda)
-    
-    # Si contiene la palabra 'cortesia' (con o sin tilde, sola o combinada), SIEMPRE es Sábana cortesía
     if "cortesia" in norm:
         return "Sábana cortesía"
-        
     if es_lenceria:
         if norm in ["mano", "toalla mano", "toalla de mano"]:
             return "Toalla mano"
@@ -186,8 +183,20 @@ def homologar_prenda_telegram(nombre_prenda, es_lenceria=False):
             return "Toalla cuerpo"
         if norm in ["tapete", "toalla tapete"]:
             return "Toalla tapete"
-            
     return nombre_prenda
+
+def es_servicio_lista_limpia(config_sesion):
+    key = config_sesion.get('key', '')
+    servicios_limpios = [
+        "fontana", "oceania", "wyndham_lenceria", "wyndham_manteleria",
+        "dann_lenceria", "dann_empleados", "bogotap_datos", "suite_manteleria", "almacen"
+    ]
+    if key in servicios_limpios:
+        return True
+    tipo = config_sesion.get('tipo', '')
+    if tipo in ["LENCERIA_MATRIZ", "MATRIZ_FILAS_CLIENTE"]:
+        return True
+    return False
 
 def llamar_gemini_rotativo(contents):
     ultimo_error = None
@@ -228,7 +237,7 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     es_oceania = (key == "oceania")
     es_bogotap_datos = (key == "bogotap_datos")
     es_dann_emp = (key == "dann_empleados")
-    es_lenceria_matriz = (tipo_op == "LENCERIA_MATRIZ" or es_fontana or es_oceania)
+    es_lenceria = es_servicio_lista_limpia(config_sesion)
 
     prompt = f"""
     Eres el auditor contable oficial de Lavaarte Lavandería SAS.
@@ -240,32 +249,28 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
        - ¿Es Wyndham Huéspedes?: {es_wyndham_huespedes}
        - EXCLUSIÓN TOTAL DE EMPLEADOS: Los empleados pagan de contado en caja diariamente. Si la lista contiene bloques, firmas o nombres propios de personas que son empleados (sin número de habitación de hotel), IGNORA Y DESCARTA POR COMPLETO esos nombres y todas las prendas asociadas a ellos.
        - PROCESAR ÚNICAMENTE HABITACIONES NUMÉRICAS DE HUÉSPEDES (ej: 204, 315, 501).
-       - PRIORIDAD AL PRIMER ÍTEM LEÍDO: Si una anotación describe una prenda compuesta o ambigua como '1 blusa de pijama', '1 pantalón de sudadera', '1 camisa tipo polo', clasifícala SIEMPRE por el PRIMER sustantivo/prenda mencionado. Ejemplo: 'blusa de pijama' DEBE clasificarse como 'Blusa/Blouse' (código 6) y NUNCA como 'Pijama'.
-       - UNIFICACIÓN Y SUMA DE PRENDAS IDÉNTICAS: Si dentro de una misma habitación anotan prendas iguales separadas por color o detalle (ej: '1 pantalón verde' y '1 pantalón azul'), unifícalas en un solo registro del catálogo base ('Pantalón/Pants', cantidad 2) en lugar de crear líneas separadas.
+       - PRIORIDAD AL PRIMER ÍTEM LEÍDO: Si una anotación describe una prenda compuesta o ambigua como '1 blusa de pijama', '1 pantalón de sudadera', clasifícala SIEMPRE por el PRIMER sustantivo/prenda mencionado ('Blusa/Blouse').
+       - UNIFICACIÓN Y SUMA DE PRENDAS IDÉNTICAS: Si dentro de una misma habitación anotan prendas iguales ('1 pantalón verde' y '1 pantalón azul'), unifícalas en un solo registro ('Pantalón/Pants', cantidad 2).
 
     2. REGLA HILTON:
-       - ¿Es Hilton?: {es_hilton}
        - Ignora cualquier número de remisión.
-       - Descarta y excluye empleados o uniformes sin habitación de huéspedes.
+       - Descarta y excluye empleados sin habitación.
 
     3. REGLAS FONTANA Y OCEANIA (LENCERÍA INSTITUCIONAL):
        - ¿Es Fontana u Oceania?: {es_fontana or es_oceania}
-       - Toda la ropa recibida es Lencería institucional.
-       - REGLA CORTESÍA OBLIGATORIA: Si el usuario escribe 'cortesía', 'cortesia' o 'toalla cortesia', DEBES clasificar la prenda como 'Sábana cortesía' (NUNCA como toalla cortesía).
+       - REGLA CORTESÍA OBLIGATORIA: Si el texto dice 'cortesía', 'cortesia' o 'toalla cortesia', DEBES clasificar la prenda como 'Sábana cortesía' (NUNCA como toalla cortesía).
        - REGLA TOALLAS: Clasifica estrictamente como 'Toalla cuerpo', 'Toalla mano' y 'Toalla tapete'. No uses 'Toalla de mano'.
 
     4. REGLAS BOGOTÁ PLAZA UNIFORMES / SUITE MANTELERÍA / DANN LENCERÍA:
-       - Si es Bogotá Plaza Uniformes (bogotap_datos): Los textos son compuestos de Cargo + Prenda (ej: 'MESERO(EV) CHAQUETA', 'COCINA DELANTAL', 'CAPITAN CAMISA'). Detecta ambos componentes para ubicar la cantidad exacta en la fila de la matriz horizontal.
+       - Si es Bogotá Plaza Uniformes (bogotap_datos): Los textos son compuestos de Cargo + Prenda (ej: 'MESERO(EV) CHAQUETA'). Detecta ambos componentes.
        - Suite Mantelería: Rango estricto de filas 3 a 18. No crear filas abajo.
 
     5. REGLAS DANN EMPLEADOS:
-       - ¿Es Dann Empleados?: {es_dann_emp}
-       - La persona puede tener un nombre propio (ej: 'Ricardo') o un código compuesto (ej: '13-514'). Asigna dicho identificador en la columna de habitación/persona.
-       - Cruza correctamente con la lista de precios Norte 2026.
+       - Persona con nombre o código (ej: '13-514'). Asigna dicho identificador en la columna habitación/persona.
 
     6. REGLAS GENERALES:
        - 'remision': Número de remisión (Hampton en Columna B; Hilton vacío).
-       - 'habitacion': Número de habitación, nombre de empleado o código (ej: '13-514').
+       - 'habitacion': Número de habitación, nombre de empleado o código.
        - 'extra': 'Sí' o 'No' según recargo.
 
     CATÁLOGO DE REFERENCIA:
@@ -301,12 +306,10 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
     filas = json.loads(texto)
 
-    # POST-PROCESAMIENTO PROGRAMÁTICO DE HOMOLOGACIÓN (FONTANA, OCEANIA Y MATRICES)
     if isinstance(filas, list):
         for f in filas:
-            f["prenda"] = homologar_prenda_telegram(f.get("prenda", ""), es_lenceria=es_lenceria_matriz)
+            f["prenda"] = homologar_prenda_telegram(f.get("prenda", ""), es_lenceria=es_lenceria)
 
-    # DOBLE FILTRO PROGRAMÁTICO PARA WYNDHAM HUÉSPEDES
     if es_wyndham_huespedes and isinstance(filas, list):
         filas_consolidadas = {}
         for f in filas:
@@ -332,21 +335,27 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
         
     return filas
 
-def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO", cuenta_destino="LAVAARTE"):
+def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO", cuenta_destino="LAVAARTE", datos_existentes=None, ajuste_texto=None):
     fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
     
+    extra_contexto = ""
+    if datos_existentes:
+        extra_contexto = f"\nDATOS PREVIAMENTE DETECTADOS: {json.dumps(datos_existentes, ensure_ascii=False)}\nCORRECCIÓN SOLICITADA POR EL USUARIO: {ajuste_texto}\nIMPORTANTE: Conserva todos los campos previos (especialmente 'valor') a menos que el usuario haya pedido cambiarlos explícitamente."
+
     if cuenta_destino == "CARLOS":
         prompt = f"""
         Eres el asistente financiero personal de Carlos Andrés Suárez.
         Analiza el comprobante, factura, recibo, audio o texto financiero de GASTO O INGRESO PERSONAL.
         Tipo de movimiento: {tipo_forzado}.
-        Categorías sugeridas: Alimentación, Transporte, Deporte / Ciclismo, Ocio / Cine, Hogar / Servicios, Salud, Ropa, Ahorro / Inversión, Otros.
+        Fecha obligatoria: Si el usuario NO especifica una fecha explícita, usa SIEMPRE la fecha de hoy '{fecha_hoy}'.
+        Categorías: Alimentación, Transporte, Deporte / Ciclismo, Ocio / Cine, Hogar / Servicios, Salud, Ropa, Ahorro / Inversión, Otros.
+        {extra_contexto}
         Devuelve EXCLUSIVAMENTE un JSON con:
         {{
           "fecha": "{fecha_hoy}",
           "tipo": "{tipo_forzado}",
-          "categoria": "Alimentación / Transporte / Deporte / etc.",
-          "concepto": "Descripción concisa del gasto o ingreso",
+          "categoria": "Alimentación / Transporte / etc.",
+          "concepto": "Descripción concisa del movimiento",
           "metodo_pago": "Efectivo / Nequi / Daviplata / Tarjeta Débito / Tarjeta Crédito / Transferencia",
           "valor": 50000
         }}
@@ -354,8 +363,10 @@ def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO", cuenta_d
     else:
         prompt = f"""
         Eres el asistente contable financiero de Lavaarte Lavandería SAS.
-        Analiza el comprobante, factura, recibo, audio o texto financiero recibido.
+        Analiza el comprobante, factura, recibo, audio o texto financiero.
         Tipo de movimiento: {tipo_forzado}.
+        Fecha obligatoria: Si el usuario NO menciona una fecha específica en el texto o foto, usa SIEMPRE la fecha de hoy '{fecha_hoy}'.
+        {extra_contexto}
         Devuelve EXCLUSIVAMENTE un JSON con:
         {{
           "fecha": "{fecha_hoy}",
@@ -376,9 +387,22 @@ def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO", cuenta_d
         contents.extend(contenido_multimodal)
     elif contenido_multimodal is not None:
         contents.append(contenido_multimodal)
+        
     texto_raw = llamar_gemini_rotativo(contents)
     texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
-    return json.loads(texto)
+    res = json.loads(texto)
+    
+    # Garantizar que el valor sea un número real no nulo
+    try:
+        res["valor"] = float(res.get("valor", 0))
+    except:
+        res["valor"] = 0.0
+        
+    # Si por algún motivo la fecha quedó vacía, asegurar hoy
+    if not res.get("fecha"):
+        res["fecha"] = fecha_hoy
+        
+    return res
 
 def enviar_mensaje_segmentado(chat_id, texto, reply_markup=None):
     MAX_CHARS = 3800
@@ -498,8 +522,8 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
     
     hotel_txt = str(config_sesion.get('hotel', '')) + " - " + str(config_sesion.get('servicio', ''))
     fecha_reg = filas[0].get('fecha', datetime.datetime.now().strftime("%d/%m/%Y"))
-    tipo_op = filas[0].get('tipo_operacion_detectada', config_sesion.get('tipo', 'HUESPEDES'))
     mov = config_sesion.get('movimiento', '')
+    es_limpio = es_servicio_lista_limpia(config_sesion)
     es_eficacia = (config_sesion.get('key') == "eficacia")
     
     r_lavaarte = config_sesion.get('resp_lavaarte', 'Conductor Lavaarte')
@@ -512,7 +536,8 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
     resumen += "👤 *Responsable Lavaarte:* `" + str(r_lavaarte) + "`\n"
     resumen += "🏨 *Responsable Hotel:* `" + str(r_hotel) + "`\n"
     
-    if es_eficacia or tipo_op == "MATRIZ_FILAS_CLIENTE":
+    # 1. CASO EFICACIA DOTACIONES
+    if es_eficacia:
         total_p = sum(item.get('cantidad', 0) for item in filas)
         resumen += "📊 *Total Dotaciones:* " + str(total_p) + " prendas\n"
         resumen += "📋 *DESGLOSE CONSOLIDADO POR EMPRESA:*\n"
@@ -523,12 +548,16 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
                 cuenta_act = cta
                 resumen += "\n🏢 *Empresa:* `" + cuenta_act + "`\n"
             resumen += "• " + str(it.get('prenda', '')) + " - Cant: *" + str(it.get('cantidad', 0)) + "*\n"
-    elif tipo_op == "LENCERIA_MATRIZ":
+            
+    # 2. CASO LENCERÍA, MANTELERÍA Y UNIFORMES (FONTANA, OCEANIA, WYNDHAM MANT/LENC, DANN LENC/EMP, BOGOTÁ PLAZA UNIFORMES)
+    elif es_limpio:
         total_p = sum(item.get('cantidad', 0) for item in filas)
-        resumen += "📊 *Total Lencería:* " + str(total_p) + " prendas\n"
-        resumen += "📋 *DETALLE:*\n"
+        resumen += "📊 *Total Prendas:* " + str(total_p) + "\n"
+        resumen += "📋 *LISTA DE CONTEO:*\n"
         for it in filas:
             resumen += "• " + str(it.get('prenda', '')) + " - Cant: *" + str(it.get('cantidad', 0)) + "*\n"
+            
+    # 3. CASO HUÉSPEDES GENERALES (CON CÓDIGO, PRECIO UNITARIO Y TOTAL)
     else:
         total_factura = sum(item.get('valorTotal', 0) for item in filas)
         resumen += "💰 *Total Liquidado:* $" + f"{total_factura:,.2f}" + "\n"
@@ -842,17 +871,22 @@ def confirmar_guardado(m):
         cuenta = ses.get("cuenta_destino", "LAVAARTE")
         bot.reply_to(m, "⏳ Guardando en el libro contable...", parse_mode='Markdown')
         try:
+            val_num = float(m_fin.get("valor", 0))
+            if val_num <= 0:
+                bot.reply_to(m, "⚠️ El valor detectado es $0. Por favor escribe: 'El valor es 50000' antes de confirmar.")
+                return
+
             if cuenta == "CARLOS":
                 payload = {
                     "tipo": m_fin.get("tipo", "GASTO"),
                     "categoria": m_fin.get("categoria", "Varios"),
-                    "valor": m_fin.get("valor", 0),
+                    "valor": val_num,
                     "metodo": m_fin.get("metodo_pago", "Transferencia/Nequi"),
                     "descripcion": m_fin.get("concepto", "")
                 }
                 resp = requests.post(URL_APPS_SCRIPT_CARLOS, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=40).json()
                 if resp.get("status") == "SUCCESS":
-                    val_fmt = f"{m_fin.get('valor', 0):,.2f}"
+                    val_fmt = f"{val_num:,.2f}"
                     txt_ok = f"✅ *¡Movimiento personal registrado con éxito!*\n\n"
                     txt_ok += f"👤 Cuenta: *Personal Carlos*\n"
                     txt_ok += f"📑 Hoja: *MOVIMIENTOS*\n"
@@ -863,11 +897,19 @@ def confirmar_guardado(m):
                 else:
                     bot.reply_to(m, "⚠️ Error Sheets Carlos: " + str(resp.get("mensaje")))
             else:
+                m_fin["valor"] = val_num
                 payload = {
                     "accion": "REGISTRAR_FINANCIERO",
                     "movimiento_financiero": m_fin
                 }
-                resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=45).json()
+                resp_raw = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=45)
+                
+                try:
+                    resp = resp_raw.json()
+                except Exception:
+                    bot.reply_to(m, f"❌ Error servidor Sheets: {resp_raw.text[:200]}")
+                    return
+
                 if resp.get("status") == "SUCCESS":
                     txt_ok = f"✅ *¡Movimiento registrado con éxito!*\n\n📑 Guardado en pestaña: *{resp.get('hoja')}*\n"
                     if resp.get("url_evidencia"):
@@ -907,16 +949,16 @@ def confirmar_guardado(m):
                 "filas": filas
             }
             
-            resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=90)
-            data_resp = resp.json()
+            resp_raw = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=90)
+            data_resp = resp_raw.json()
             
-            if resp.status_code == 200 and data_resp.get("status") == "SUCCESS":
+            if resp_raw.status_code == 200 and data_resp.get("status") == "SUCCESS":
                 hoja_dest = data_resp.get("hoja_guardada", cfg['hotel'])
                 bot.reply_to(m, "✅ *¡Datos guardados con éxito!*\n📋 Registrado en: `" + str(hoja_dest) + "`\n⏱️ Auditoría generada en `TIEMPOS` y `RECEPCION_ENTREGA` (Hora Colombia OK).", parse_mode='Markdown')
                 sesiones[chat_id]["filas"] = []
                 bot.send_message(chat_id, "¿Qué deseas hacer a continuación?", reply_markup=menu_post_guardado())
             else:
-                bot.reply_to(m, "⚠️ Error del servidor: " + str(data_resp.get("mensaje", resp.text)))
+                bot.reply_to(m, "⚠️ Error del servidor: " + str(data_resp.get("mensaje", resp_raw.text)))
         except Exception as e:
             bot.reply_to(m, "❌ Error enviando a Google Sheets: " + str(e))
     else:
@@ -936,9 +978,39 @@ def procesar_texto_general(m):
     ses = sesiones.get(chat_id, {})
     paso = ses.get("paso_custodia")
     
+    # 1. CORRECCIÓN O INGRESO FINANCIERO
     if ses.get("modulo") == "FINANCIERO":
         tipo_mov = ses.get("tipo_fin", "EGRESO")
         cuenta = ses.get("cuenta_destino", "LAVAARTE")
+        
+        # Si ya había un movimiento pendiente y el usuario escribe texto (ej: "la fecha es de ayer" o "son 35000")
+        datos_previos = ses.get("movimiento_fin_pendiente")
+        if datos_previos:
+            bot.reply_to(m, "⚙️ Aplicando corrección al movimiento financiero...", parse_mode='Markdown')
+            try:
+                datos_fin = analizar_financiero_ia(None, tipo_mov, cuenta, datos_existentes=datos_previos, ajuste_texto=m.text)
+                if "foto_base64" in datos_previos:
+                    datos_fin["foto_base64"] = datos_previos["foto_base64"]
+                sesiones[chat_id]["movimiento_fin_pendiente"] = datos_fin
+                val_fmt = f"{datos_fin.get('valor', 0):,.2f}"
+                nombre_cuenta = "👔 Lavaarte SAS" if cuenta == "LAVAARTE" else "👤 Personal Carlos"
+
+                resumen_fin = f"📊 *CONFIRMACIÓN CORREGIDA ({nombre_cuenta}):*\n\n"
+                resumen_fin += f"📌 *Tipo:* `{tipo_mov}`\n"
+                resumen_fin += f"📅 *Fecha:* `{datos_fin.get('fecha')}`\n"
+                resumen_fin += f"🏷️ *Categoría:* *{datos_fin.get('categoria')}*\n"
+                resumen_fin += f"📝 *Concepto:* {datos_fin.get('concepto')}\n"
+                if cuenta == "LAVAARTE":
+                    resumen_fin += f"🏢 *Tercero / Proveedor:* {datos_fin.get('tercero', 'N/A')}\n"
+                    resumen_fin += f"👤 *Responsable:* {datos_fin.get('responsable', 'N/A')}\n"
+                resumen_fin += f"💳 *Método de Pago:* {datos_fin.get('metodo_pago')}\n"
+                resumen_fin += f"💰 *Valor:* *${val_fmt}*\n\n"
+                resumen_fin += "💬 Escribe *SI* para registrar en Sheets o *NO* para cancelar."
+                bot.send_message(chat_id, resumen_fin, parse_mode='Markdown')
+            except Exception as e:
+                bot.reply_to(m, "❌ Error aplicando corrección financiera: " + str(e))
+            return
+            
         bot.reply_to(m, "🧾 Analizando movimiento con IA...", parse_mode='Markdown')
         try:
             datos_fin = analizar_financiero_ia(m.text, tipo_mov, cuenta)
@@ -962,6 +1034,7 @@ def procesar_texto_general(m):
             bot.reply_to(m, "❌ Error analizando texto financiero: " + str(e))
         return
 
+    # PASOS DE CUSTODIA
     if paso == "RESP_LAVAARTE_DESPACHO":
         ses["resp_lavaarte"] = m.text.strip()
         ses["resp_hotel"] = "Por entregar en hotel"
@@ -1014,6 +1087,7 @@ def procesar_texto_general(m):
         bot.reply_to(m, f"✅ Recibe por Lavaarte: *{m.text.strip()}*\n\n📸 *¡Listo!* Ya puedes enviar las fotos de las planillas, notas de voz o texto de la ropa recibida:", parse_mode='Markdown')
         return
 
+    # CORRECCIÓN DE PRENDAS
     if ses.get("filas"):
         bot.reply_to(m, "⚙️ Aplicando ajustes a la lista...")
         try:
@@ -1030,7 +1104,7 @@ def procesar_texto_general(m):
         sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
         
     cfg = sesiones[chat_id]
-    bot.reply_to(m, "📝 Procesando texto para *" + str(cfg['hotel']) + "* con reglas específicas...", parse_mode='Markdown')
+    bot.reply_to(m, "📝 Procesando texto para *" + str(cfg['hotel']) + "*...", parse_mode='Markdown')
     try:
         filas = analizar_con_ia([m.text], cfg)
         sesiones[chat_id]["filas"] = filas
@@ -1042,5 +1116,5 @@ def procesar_texto_general(m):
 # ==========================================
 # INICIO DEL SERVICIO
 # ==========================================
-print("🚀 Bot Maestro Lavaarte en línea (Reglas Aisladas por Hotel / Zona Horaria Bogotá / Wyndham Huéspedes Blindado / Finanzas Duales Lavaarte-Carlos)")
+print("🚀 Bot Maestro Lavaarte en línea (Listas Limpias para Lencería y Uniformes / Auditoría Financiera Blindada)")
 bot.infinity_polling()
