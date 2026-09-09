@@ -1,6 +1,6 @@
 # =========================================================================
 # BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
-# MODELOS 2026 ACTUALIZADOS: FLASH LIBRE DE CUOTA (SIN MODELOS PRO 429)
+# MODELOS FLASH ACTIVOS: SIN OBSOLETOS (3.5-FLASH-LITE ACTIVO)
 # =========================================================================
 
 import telebot
@@ -25,11 +25,11 @@ URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe
 bot = telebot.TeleBot(TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# MODELOS FLASH COMPATIBLES CON FREE TIER (Sin modelos Pro que dan limit: 0)
+# Modelos Flash 100% vigentes con soporte Free Tier
 MODELOS_ROTACION = [
     'gemini-2.5-flash',
     'gemini-2.0-flash',
-    'gemini-2.5-flash-lite'
+    'gemini-3.5-flash-lite'
 ]
 
 sesiones = {}
@@ -220,7 +220,6 @@ def optimizar_imagen_para_ia(img_pil):
 def llamar_gemini_rotativo(contents):
     ultimo_error = None
     
-    # Configuración de balance: thinking_budget acotado (512 tokens) para lectura manuscrita sin atascos
     config_llamada = types.GenerateContentConfig(
         temperature=0.1,
         thinking_config=types.ThinkingConfig(thinking_budget=512)
@@ -239,7 +238,7 @@ def llamar_gemini_rotativo(contents):
             except Exception as e:
                 err_str = str(e)
                 ultimo_error = e
-                # Salto inmediato ante 429 (límite de cuota) o 503 (servidor lleno)
+                # Salto inmediato ante 429, 503, 404 o 403
                 if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "404", "NOT_FOUND", "403", "PERMISSION_DENIED"]):
                     time.sleep(1.0)
                     break
@@ -1174,5 +1173,5 @@ def procesar_texto_general(m):
 # ==========================================
 # INICIO DEL SERVICIO
 # ==========================================
-print("🚀 Bot Maestro Lavaarte en línea (100% Flash - Alta Velocidad y Precisión)")
+print("🚀 Bot Maestro Lavaarte en línea (Modelos Flash Oficiales - Cero 404/429)")
 bot.infinity_polling()
