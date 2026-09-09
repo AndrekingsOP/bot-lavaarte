@@ -1,6 +1,6 @@
 # =========================================================================
 # BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
-# MODELOS ACTUALIZADOS + BLINDAJE CONTRA ERRORES 503, 429, 403 Y 404
+# EQUILIBRIO PERFECTO: VISIÓN PRECISA + RESPUESTA RÁPIDA (SIN RETRASOS)
 # =========================================================================
 
 import telebot
@@ -25,12 +25,11 @@ URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe
 bot = telebot.TeleBot(TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Lista completa y actualizada con los modelos más recientes y alias continuos
+# Jerarquía balanceada: Primero el más inteligente/ágil, luego relevos directos
 MODELOS_ROTACION = [
     'gemini-2.5-flash',
     'gemini-2.0-flash',
     'gemini-flash-latest',
-    'gemini-2.5-pro',
     'gemini-1.5-flash'
 ]
 
@@ -206,21 +205,33 @@ def es_servicio_lista_limpia(config_sesion):
 
 def llamar_gemini_rotativo(contents):
     ultimo_error = None
+    
+    # Configuración de equilibrio: temperatura baja para precisión contable
+    # y presupuesto de pensamiento acotado (1024 tokens) para que no se quede minutos pensando.
+    config_balanceada = types.GenerateContentConfig(
+        temperature=0.1,
+        thinking_config=types.ThinkingConfig(thinking_budget=1024)
+    )
+
     for modelo in MODELOS_ROTACION:
         for intento in range(2):
             try:
-                resp = client.models.generate_content(model=modelo, contents=contents)
+                resp = client.models.generate_content(
+                    model=modelo, 
+                    contents=contents,
+                    config=config_balanceada
+                )
                 if resp and resp.text:
                     return resp.text
             except Exception as e:
                 err_str = str(e)
                 ultimo_error = e
-                # Blindaje automático: detecta saturación o rechazos y conmuta de inmediato
+                # Conmuta rápidamente si el modelo está saturado o devuelve error
                 if any(k in err_str for k in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "403", "PERMISSION_DENIED", "404", "NOT_FOUND"]):
-                    time.sleep(0.5)
+                    time.sleep(0.4)
                     break
                 else:
-                    time.sleep(0.8)
+                    time.sleep(0.6)
                     continue
     raise ultimo_error
 
@@ -1138,5 +1149,5 @@ def procesar_texto_general(m):
 # ==========================================
 # INICIO DEL SERVICIO
 # ==========================================
-print("🚀 Bot Maestro Lavaarte en línea (Modelos Actualizados / Blindaje Total Anti-503)")
+print("🚀 Bot Maestro Lavaarte en línea (Equilibrio de Alta Velocidad y Precisión Visual)")
 bot.infinity_polling()
