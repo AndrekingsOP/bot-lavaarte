@@ -1,5 +1,6 @@
 # =========================================================================
 # BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
+# MODELOS ACTUALIZADOS + BLINDAJE CONTRA ERRORES 503, 429, 403 Y 404
 # =========================================================================
 
 import telebot
@@ -24,10 +25,13 @@ URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe
 bot = telebot.TeleBot(TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+# Lista completa y actualizada con los modelos más recientes y alias continuos
 MODELOS_ROTACION = [
     'gemini-2.5-flash',
     'gemini-2.0-flash',
-    'gemini-flash-latest'
+    'gemini-flash-latest',
+    'gemini-2.5-pro',
+    'gemini-1.5-flash'
 ]
 
 sesiones = {}
@@ -211,11 +215,12 @@ def llamar_gemini_rotativo(contents):
             except Exception as e:
                 err_str = str(e)
                 ultimo_error = e
-                if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "404", "NOT_FOUND"]):
-                    time.sleep(0.8)
+                # Blindaje automático: detecta saturación o rechazos y conmuta de inmediato
+                if any(k in err_str for k in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "403", "PERMISSION_DENIED", "404", "NOT_FOUND"]):
+                    time.sleep(0.5)
                     break
                 else:
-                    time.sleep(1.0)
+                    time.sleep(0.8)
                     continue
     raise ultimo_error
 
@@ -1133,5 +1138,5 @@ def procesar_texto_general(m):
 # ==========================================
 # INICIO DEL SERVICIO
 # ==========================================
-print("🚀 Bot Maestro Lavaarte en línea (Listas Limpias para Lencería y Uniformes / Auditoría Financiera Blindada)")
+print("🚀 Bot Maestro Lavaarte en línea (Modelos Actualizados / Blindaje Total Anti-503)")
 bot.infinity_polling()
