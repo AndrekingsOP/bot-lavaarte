@@ -1,6 +1,6 @@
 # =========================================================================
 # BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
-# EQUILIBRIO PERFECTO: VISIÓN PRECISA + RESPUESTA RÁPIDA (SIN RETRASOS)
+# MODELOS 2026 ACTUALIZADOS: VISIÓN OCR PRECISA + SIN ERRORES 404/503
 # =========================================================================
 
 import telebot
@@ -25,12 +25,11 @@ URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe
 bot = telebot.TeleBot(TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Jerarquía balanceada: Primero el más inteligente/ágil, luego relevos directos
+# Modelos oficiales soportados en la versión actual (sin versiones 1.5 deprecadas)
 MODELOS_ROTACION = [
     'gemini-2.5-flash',
     'gemini-2.0-flash',
-    'gemini-flash-latest',
-    'gemini-1.5-flash'
+    'gemini-2.5-pro'
 ]
 
 sesiones = {}
@@ -206,9 +205,8 @@ def es_servicio_lista_limpia(config_sesion):
 def llamar_gemini_rotativo(contents):
     ultimo_error = None
     
-    # Configuración de equilibrio: temperatura baja para precisión contable
-    # y presupuesto de pensamiento acotado (1024 tokens) para que no se quede minutos pensando.
-    config_balanceada = types.GenerateContentConfig(
+    # Configuración equilibrada: alta precisión visual en OCR y respuesta ágil
+    config_llamada = types.GenerateContentConfig(
         temperature=0.1,
         thinking_config=types.ThinkingConfig(thinking_budget=1024)
     )
@@ -219,15 +217,15 @@ def llamar_gemini_rotativo(contents):
                 resp = client.models.generate_content(
                     model=modelo, 
                     contents=contents,
-                    config=config_balanceada
+                    config=config_llamada
                 )
                 if resp and resp.text:
                     return resp.text
             except Exception as e:
                 err_str = str(e)
                 ultimo_error = e
-                # Conmuta rápidamente si el modelo está saturado o devuelve error
-                if any(k in err_str for k in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "403", "PERMISSION_DENIED", "404", "NOT_FOUND"]):
+                # Detección y salto inmediato ante saturación 503 o errores de modelo 404/429
+                if any(k in err_str for k in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "404", "NOT_FOUND", "403", "PERMISSION_DENIED"]):
                     time.sleep(0.4)
                     break
                 else:
@@ -1149,5 +1147,5 @@ def procesar_texto_general(m):
 # ==========================================
 # INICIO DEL SERVICIO
 # ==========================================
-print("🚀 Bot Maestro Lavaarte en línea (Equilibrio de Alta Velocidad y Precisión Visual)")
+print("🚀 Bot Maestro Lavaarte en línea (Modelos Oficiales 2026 - OCR de Alta Fidelidad)")
 bot.infinity_polling()
