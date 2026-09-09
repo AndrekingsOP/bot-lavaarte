@@ -1,6 +1,6 @@
 # =========================================================================
 # BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
-# MODELOS 2026 ACTUALIZADOS: VISIÓN OCR PRECISA + COMPRESIÓN DINÁMICA
+# MODELOS 2026 ACTUALIZADOS: FLASH LIBRE DE CUOTA (SIN MODELOS PRO 429)
 # =========================================================================
 
 import telebot
@@ -25,11 +25,11 @@ URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe
 bot = telebot.TeleBot(TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Modelos oficiales vigentes requeridos por la API
+# MODELOS FLASH COMPATIBLES CON FREE TIER (Sin modelos Pro que dan limit: 0)
 MODELOS_ROTACION = [
     'gemini-2.5-flash',
     'gemini-2.0-flash',
-    'gemini-3.1-pro-preview'
+    'gemini-2.5-flash-lite'
 ]
 
 sesiones = {}
@@ -203,7 +203,7 @@ def es_servicio_lista_limpia(config_sesion):
     return False
 
 def optimizar_imagen_para_ia(img_pil):
-    """Redimensiona y comprime la imagen a tamaño óptimo para lectura OCR ultrarrápida."""
+    """Comprime y redimensiona para velocidad instantánea sin perder legibilidad OCR."""
     max_dim = 1600
     w, h = img_pil.size
     if max(w, h) > max_dim:
@@ -220,7 +220,7 @@ def optimizar_imagen_para_ia(img_pil):
 def llamar_gemini_rotativo(contents):
     ultimo_error = None
     
-    # 512 tokens de pensamiento: analiza la letra manuscrita sin perder velocidad
+    # Configuración de balance: thinking_budget acotado (512 tokens) para lectura manuscrita sin atascos
     config_llamada = types.GenerateContentConfig(
         temperature=0.1,
         thinking_config=types.ThinkingConfig(thinking_budget=512)
@@ -239,12 +239,12 @@ def llamar_gemini_rotativo(contents):
             except Exception as e:
                 err_str = str(e)
                 ultimo_error = e
-                # Conmutación inmediata ante cualquier fallo de endpoint o saturación
-                if any(k in err_str for k in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "404", "NOT_FOUND", "403", "PERMISSION_DENIED"]):
-                    time.sleep(0.3)
+                # Salto inmediato ante 429 (límite de cuota) o 503 (servidor lleno)
+                if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "404", "NOT_FOUND", "403", "PERMISSION_DENIED"]):
+                    time.sleep(1.0)
                     break
                 else:
-                    time.sleep(0.5)
+                    time.sleep(0.8)
                     continue
     raise ultimo_error
 
@@ -1174,5 +1174,5 @@ def procesar_texto_general(m):
 # ==========================================
 # INICIO DEL SERVICIO
 # ==========================================
-print("🚀 Bot Maestro Lavaarte en línea (Modelos 2026 - OCR Optimizado sin 404)")
+print("🚀 Bot Maestro Lavaarte en línea (100% Flash - Alta Velocidad y Precisión)")
 bot.infinity_polling()
