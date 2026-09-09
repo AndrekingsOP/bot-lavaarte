@@ -1,6 +1,6 @@
 # =========================================================================
 # BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
-# MODELOS 2026 ACTUALIZADOS: VISIÓN OCR PRECISA + SIN ERRORES 404/503
+# MODELOS 2026 ACTUALIZADOS: VISIÓN OCR PRECISA + COMPRESIÓN DINÁMICA
 # =========================================================================
 
 import telebot
@@ -25,11 +25,11 @@ URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe
 bot = telebot.TeleBot(TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Modelos oficiales soportados en la versión actual (sin versiones 1.5 deprecadas)
+# Modelos oficiales vigentes requeridos por la API
 MODELOS_ROTACION = [
     'gemini-2.5-flash',
     'gemini-2.0-flash',
-    'gemini-2.5-pro'
+    'gemini-3.1-pro-preview'
 ]
 
 sesiones = {}
@@ -202,13 +202,28 @@ def es_servicio_lista_limpia(config_sesion):
         return True
     return False
 
+def optimizar_imagen_para_ia(img_pil):
+    """Redimensiona y comprime la imagen a tamaño óptimo para lectura OCR ultrarrápida."""
+    max_dim = 1600
+    w, h = img_pil.size
+    if max(w, h) > max_dim:
+        scale = max_dim / max(w, h)
+        img_pil = img_pil.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    
+    if img_pil.mode in ("RGBA", "P"):
+        img_pil = img_pil.convert("RGB")
+        
+    buf = io.BytesIO()
+    img_pil.save(buf, format="JPEG", quality=85, optimize=True)
+    return types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg")
+
 def llamar_gemini_rotativo(contents):
     ultimo_error = None
     
-    # Configuración equilibrada: alta precisión visual en OCR y respuesta ágil
+    # 512 tokens de pensamiento: analiza la letra manuscrita sin perder velocidad
     config_llamada = types.GenerateContentConfig(
         temperature=0.1,
-        thinking_config=types.ThinkingConfig(thinking_budget=1024)
+        thinking_config=types.ThinkingConfig(thinking_budget=512)
     )
 
     for modelo in MODELOS_ROTACION:
@@ -224,12 +239,12 @@ def llamar_gemini_rotativo(contents):
             except Exception as e:
                 err_str = str(e)
                 ultimo_error = e
-                # Detección y salto inmediato ante saturación 503 o errores de modelo 404/429
+                # Conmutación inmediata ante cualquier fallo de endpoint o saturación
                 if any(k in err_str for k in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "404", "NOT_FOUND", "403", "PERMISSION_DENIED"]):
-                    time.sleep(0.4)
+                    time.sleep(0.3)
                     break
                 else:
-                    time.sleep(0.6)
+                    time.sleep(0.5)
                     continue
     raise ultimo_error
 
@@ -314,7 +329,13 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     
     contents = [prompt]
     if isinstance(contenido_multimodal, list):
-        contents.extend(contenido_multimodal)
+        for item in contenido_multimodal:
+            if isinstance(item, Image.Image):
+                contents.append(optimizar_imagen_para_ia(item))
+            else:
+                contents.append(item)
+    elif isinstance(contenido_multimodal, Image.Image):
+        contents.append(optimizar_imagen_para_ia(contenido_multimodal))
     elif contenido_multimodal is not None:
         contents.append(contenido_multimodal)
         
@@ -399,8 +420,14 @@ def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO", cuenta_d
         """
         
     contents = [prompt]
-    if isinstance(contenido_multimodal, list):
-        contents.extend(contenido_multimodal)
+    if isinstance(contenido_multimodal, Image.Image):
+        contents.append(optimizar_imagen_para_ia(contenido_multimodal))
+    elif isinstance(contenido_multimodal, list):
+        for it in contenido_multimodal:
+            if isinstance(it, Image.Image):
+                contents.append(optimizar_imagen_para_ia(it))
+            else:
+                contents.append(it)
     elif contenido_multimodal is not None:
         contents.append(contenido_multimodal)
         
@@ -1147,5 +1174,5 @@ def procesar_texto_general(m):
 # ==========================================
 # INICIO DEL SERVICIO
 # ==========================================
-print("🚀 Bot Maestro Lavaarte en línea (Modelos Oficiales 2026 - OCR de Alta Fidelidad)")
+print("🚀 Bot Maestro Lavaarte en línea (Modelos 2026 - OCR Optimizado sin 404)")
 bot.infinity_polling()
