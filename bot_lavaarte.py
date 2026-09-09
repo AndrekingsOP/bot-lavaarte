@@ -1,3 +1,7 @@
+# =========================================================================
+# BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
+# =========================================================================
+
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import requests
@@ -21,10 +25,8 @@ bot = telebot.TeleBot(TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 MODELOS_ROTACION = [
-    'gemini-3.6-flash',
-    'gemini-3.5-flash',
-    'gemini-3.1-flash-lite',
-    'gemini-3-flash',
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
     'gemini-flash-latest'
 ]
 
@@ -392,13 +394,11 @@ def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO", cuenta_d
     texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
     res = json.loads(texto)
     
-    # Garantizar que el valor sea un número real no nulo
     try:
         res["valor"] = float(res.get("valor", 0))
     except:
         res["valor"] = 0.0
         
-    # Si por algún motivo la fecha quedó vacía, asegurar hoy
     if not res.get("fecha"):
         res["fecha"] = fecha_hoy
         
@@ -549,7 +549,7 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
                 resumen += "\n🏢 *Empresa:* `" + cuenta_act + "`\n"
             resumen += "• " + str(it.get('prenda', '')) + " - Cant: *" + str(it.get('cantidad', 0)) + "*\n"
             
-    # 2. CASO LENCERÍA, MANTELERÍA Y UNIFORMES (FONTANA, OCEANIA, WYNDHAM MANT/LENC, DANN LENC/EMP, BOGOTÁ PLAZA UNIFORMES)
+    # 2. CASO LENCERÍA, MANTELERÍA Y UNIFORMES
     elif es_limpio:
         total_p = sum(item.get('cantidad', 0) for item in filas)
         resumen += "📊 *Total Prendas:* " + str(total_p) + "\n"
@@ -557,7 +557,7 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
         for it in filas:
             resumen += "• " + str(it.get('prenda', '')) + " - Cant: *" + str(it.get('cantidad', 0)) + "*\n"
             
-    # 3. CASO HUÉSPEDES GENERALES (CON CÓDIGO, PRECIO UNITARIO Y TOTAL)
+    # 3. CASO HUÉSPEDES GENERALES
     else:
         total_factura = sum(item.get('valorTotal', 0) for item in filas)
         resumen += "💰 *Total Liquidado:* $" + f"{total_factura:,.2f}" + "\n"
@@ -699,26 +699,44 @@ def iniciar_confirmacion_hotel(call):
     chat_id = call.message.chat.id
     cfg = sesiones.get(chat_id, {})
     hotel_nom = cfg.get("hotel", "Hotel")
+    dia_actual = datetime.datetime.now().day
     
-    bot.send_message(chat_id, "🔎 Buscando despacho pendiente para *" + str(hotel_nom) + "*...", parse_mode='Markdown')
+    bot.send_message(chat_id, f"🔎 Buscando despacho activo del día {dia_actual} para *{hotel_nom}*...", parse_mode='Markdown')
     try:
-        payload = {"accion": "CONSULTAR_DESPACHO", "ruta": cfg.get("ruta", "Oriente"), "hotel": hotel_nom}
+        payload = {
+            "accion": "CONSULTAR_DESPACHO",
+            "ruta": cfg.get("ruta", "Oriente"),
+            "hotel": hotel_nom,
+            "destino": cfg.get("hoja", ""),
+            "dia": dia_actual
+        }
         resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=30).json()
         
         if resp.get("status") == "SUCCESS":
             desp = resp.get("despacho", {})
+            items_detalle = desp.get("items_detalle", [])
             sesiones[chat_id]["despacho_pendiente"] = desp
             sesiones[chat_id]["paso_custodia"] = "CONFIRMAR_QUIEN_RECIBE_HOTEL"
             
-            txt_info = "📋 *DESPACHO DETALLADO ENCONTRADO EN SISTEMA:*\n\n"
-            txt_info += "📅 *Fecha Despacho:* " + str(desp.get("fecha")) + " (" + str(desp.get("hora")) + ")\n"
-            txt_info += "👤 *Despachado por:* " + str(desp.get("despachado_por")) + "\n"
-            txt_info += "📊 *Total Prendas:* *" + str(desp.get("total_prendas")) + "*\n"
-            txt_info += "📝 *Detalle:* " + str(desp.get("notas", "N/A")) + "\n\n"
+            txt_info = "📦 *DESPACHO ACTIVO DE PLANTA PARA HOY:*\n"
+            txt_info += f"🏨 *Hotel:* {hotel_nom}\n"
+            txt_info += f"📅 *Fecha:* {desp.get('fecha')} ({desp.get('hora')})\n"
+            txt_info += f"👤 *Despachador en Planta:* {desp.get('despachado_por')}\n"
+            txt_info += "──────────────────────────\n"
+            
+            if items_detalle:
+                txt_info += "📋 *PRENDAS A ENTREGAR:*\n"
+                for it in items_detalle:
+                    txt_info += f"• *{it['prenda']}:* {it['cantidad']} unidades\n"
+            else:
+                txt_info += f"📝 *Detalle:* {desp.get('notas', 'Despacho registrado')}\n"
+                
+            txt_info += "──────────────────────────\n"
+            txt_info += f"📊 *Total Piezas:* *{desp.get('total_prendas')}*\n\n"
             txt_info += "✍️ *Por favor escribe el nombre de la persona que recibe en el hotel (Nombre y cargo):*"
             bot.send_message(chat_id, txt_info, parse_mode='Markdown')
         else:
-            bot.send_message(chat_id, "⚠️ No hay un despacho pendiente registrado en planta para *" + str(hotel_nom) + "*.", parse_mode='Markdown')
+            bot.send_message(chat_id, f"⚠️ No hay un despacho activo registrado en planta para hoy en *{hotel_nom}*.\n\nVerifica que planta ya haya registrado las cantidades en la columna E.", parse_mode='Markdown')
     except Exception as e:
         bot.send_message(chat_id, "❌ Error consultando: " + str(e))
 
@@ -983,7 +1001,6 @@ def procesar_texto_general(m):
         tipo_mov = ses.get("tipo_fin", "EGRESO")
         cuenta = ses.get("cuenta_destino", "LAVAARTE")
         
-        # Si ya había un movimiento pendiente y el usuario escribe texto (ej: "la fecha es de ayer" o "son 35000")
         datos_previos = ses.get("movimiento_fin_pendiente")
         if datos_previos:
             bot.reply_to(m, "⚙️ Aplicando corrección al movimiento financiero...", parse_mode='Markdown')
