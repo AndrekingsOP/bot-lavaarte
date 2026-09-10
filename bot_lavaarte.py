@@ -1,6 +1,6 @@
 # =========================================================================
 # BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
-# MODELOS FLASH ACTIVOS: SIN OBSOLETOS (3.5-FLASH-LITE ACTIVO)
+# MODELOS 100% FLASH + OCR COMPRIMIDO + HOMOLOGACIÓN BLINDADA (FACIAL / PROTECTOR)
 # =========================================================================
 
 import telebot
@@ -25,7 +25,7 @@ URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe
 bot = telebot.TeleBot(TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Modelos Flash 100% vigentes con soporte Free Tier
+# MODELOS FLASH ACTIVOS EN FREE TIER (Protección permanente anti-429 y anti-404)
 MODELOS_ROTACION = [
     'gemini-2.5-flash',
     'gemini-2.0-flash',
@@ -178,8 +178,19 @@ def limpiar_texto_simple(txt):
 
 def homologar_prenda_telegram(nombre_prenda, es_lenceria=False):
     norm = limpiar_texto_simple(nombre_prenda)
+    
+    # 1. FACIAL (Cualquier variación en minúscula/mayúscula)
+    if "facial" in norm:
+        return "FACIAL"
+        
+    # 2. PROTECTOR DE COLCHON (Con o sin tilde, con o sin "de")
+    if "protector" in norm and "colchon" in norm:
+        return "PROTECTOR DE COLCHON"
+        
+    # 3. CORTESIA
     if "cortesia" in norm:
         return "Sábana cortesía"
+        
     if es_lenceria:
         if norm in ["mano", "toalla mano", "toalla de mano"]:
             return "Toalla mano"
@@ -203,7 +214,7 @@ def es_servicio_lista_limpia(config_sesion):
     return False
 
 def optimizar_imagen_para_ia(img_pil):
-    """Comprime y redimensiona para velocidad instantánea sin perder legibilidad OCR."""
+    """Comprime a tamaño óptimo para OCR rápido y nítido."""
     max_dim = 1600
     w, h = img_pil.size
     if max(w, h) > max_dim:
@@ -220,6 +231,7 @@ def optimizar_imagen_para_ia(img_pil):
 def llamar_gemini_rotativo(contents):
     ultimo_error = None
     
+    # Límite exacto de razonamiento: 512 tokens (OCR preciso sin demoras)
     config_llamada = types.GenerateContentConfig(
         temperature=0.1,
         thinking_config=types.ThinkingConfig(thinking_budget=512)
@@ -238,7 +250,7 @@ def llamar_gemini_rotativo(contents):
             except Exception as e:
                 err_str = str(e)
                 ultimo_error = e
-                # Salto inmediato ante 429, 503, 404 o 403
+                # Salto silencioso ante 429, 503, 404 o 403
                 if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "404", "NOT_FOUND", "403", "PERMISSION_DENIED"]):
                     time.sleep(1.0)
                     break
@@ -286,10 +298,11 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
        - Ignora cualquier número de remisión.
        - Descarta y excluye empleados sin habitación.
 
-    3. REGLAS FONTANA Y OCEANIA (LENCERÍA INSTITUCIONAL):
-       - ¿Es Fontana u Oceania?: {es_fontana or es_oceania}
-       - REGLA CORTESÍA OBLIGATORIA: Si el texto dice 'cortesía', 'cortesia' o 'toalla cortesia', DEBES clasificar la prenda como 'Sábana cortesía' (NUNCA como toalla cortesía).
-       - REGLA TOALLAS: Clasifica estrictamente como 'Toalla cuerpo', 'Toalla mano' y 'Toalla tapete'. No uses 'Toalla de mano'.
+    3. REGLAS WYNDHAM LENCERÍA / FONTANA / OCEANIA:
+       - FACIAL: Cualquier toalla facial, facial pequeña o similar clasifícala estrictamente como 'FACIAL'.
+       - PROTECTOR: 'protector colchon', 'protector de colchón' clasifícalo estrictamente como 'PROTECTOR DE COLCHON'.
+       - CORTESÍA: 'cortesía', 'cortesia' o 'toalla cortesia' clasifícalo estrictamente como 'Sábana cortesía'.
+       - TOALLAS: Clasifica como 'Toalla cuerpo', 'Toalla mano' y 'Toalla tapete'.
 
     4. REGLAS BOGOTÁ PLAZA UNIFORMES / SUITE MANTELERÍA / DANN LENCERÍA:
        - Si es Bogotá Plaza Uniformes (bogotap_datos): Los textos son compuestos de Cargo + Prenda (ej: 'MESERO(EV) CHAQUETA'). Detecta ambos componentes.
@@ -1173,5 +1186,5 @@ def procesar_texto_general(m):
 # ==========================================
 # INICIO DEL SERVICIO
 # ==========================================
-print("🚀 Bot Maestro Lavaarte en línea (Modelos Flash Oficiales - Cero 404/429)")
+print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Homologación Blindada)")
 bot.infinity_polling()
