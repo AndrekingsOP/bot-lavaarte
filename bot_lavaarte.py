@@ -1,6 +1,7 @@
 # =========================================================================
 # BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
-# MODELOS 100% FLASH + OCR COMPRIMIDO + HOMOLOGACIÓN BLINDADA (FACIAL / PROTECTOR)
+# MODELOS 100% FLASH + OCR COMPRIMIDO + HOMOLOGACIÓN BLINDADA (OCEANÍA / WYNDHAM)
+# GESTIÓN FINANCIERA (LAVAARTE + CARLOS) + FIRMAS DIGITALES DRIVE + AUDITORÍA IA
 # =========================================================================
 
 import telebot
@@ -25,7 +26,6 @@ URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe
 bot = telebot.TeleBot(TOKEN)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# MODELOS FLASH ACTIVOS EN FREE TIER (Protección permanente anti-429 y anti-404)
 MODELOS_ROTACION = [
     'gemini-2.5-flash',
     'gemini-2.0-flash',
@@ -176,28 +176,51 @@ def limpiar_texto_simple(txt):
     txt = ''.join(c for c in txt if unicodedata.category(c) != 'Mn')
     return txt.lower().strip()
 
-def homologar_prenda_telegram(nombre_prenda, es_lenceria=False):
+def homologar_prenda_telegram(nombre_prenda, es_lenceria=False, es_wyndham_huespedes=False):
     norm = limpiar_texto_simple(nombre_prenda)
     
-    # 1. FACIAL (Cualquier variación en minúscula/mayúscula)
+    # 1. REGLA ESTRICTA WYNDHAM HUÉSPEDES (LEGGINS = PANTALÓN / TOP = BRASSIERE)
+    if es_wyndham_huespedes or "wyndham" in norm:
+        if any(w in norm for w in ["leggin", "leggis", "licra", "pantalon de licra", "malla"]):
+            return "Pantalón/Pants"
+        if any(w in norm for w in ["top", "crop top", "crop", "bra", "corpin"]):
+            return "Brassiere/Brassiere"
+
+    # 2. REGLA OCEANÍA Y LENCERÍA GENERAL
+    # Ajustable sencilla / sensilla / sensillo
+    if "ajustable" in norm and any(w in norm for w in ["sensill", "sencill"]):
+        return "Sábana ajustable sencilla"
+    if "plana" in norm and any(w in norm for w in ["sensill", "sencill"]):
+        return "Sábana plana sencilla"
+
+    # Cojín (con o sin tilde)
+    if "cojin" in norm or "cojines" in norm:
+        return "Cojín"
+
+    # Funda / Fundas (Singularización obligatoria)
+    if norm in ["funda", "fundas", "funda de almohada", "fundas de almohada"]:
+        return "Funda"
+
+    # Facial (Unificación total)
     if "facial" in norm:
         return "FACIAL"
         
-    # 2. PROTECTOR DE COLCHON (Con o sin tilde, con o sin "de")
+    # Protector de colchón
     if "protector" in norm and "colchon" in norm:
         return "PROTECTOR DE COLCHON"
         
-    # 3. CORTESIA
+    # Cortesía
     if "cortesia" in norm:
         return "Sábana cortesía"
         
     if es_lenceria:
-        if norm in ["mano", "toalla mano", "toalla de mano"]:
+        if norm in ["mano", "toalla mano", "toalla de mano", "toallas de mano", "toallas mano"]:
             return "Toalla mano"
-        if norm in ["cuerpo", "toalla cuerpo", "toalla de cuerpo"]:
+        if norm in ["cuerpo", "toalla cuerpo", "toalla de cuerpo", "toallas cuerpo", "toallas de cuerpo"]:
             return "Toalla cuerpo"
-        if norm in ["tapete", "toalla tapete"]:
+        if norm in ["tapete", "toalla tapete", "toallas tapete"]:
             return "Toalla tapete"
+            
     return nombre_prenda
 
 def es_servicio_lista_limpia(config_sesion):
@@ -214,7 +237,6 @@ def es_servicio_lista_limpia(config_sesion):
     return False
 
 def optimizar_imagen_para_ia(img_pil):
-    """Comprime a tamaño óptimo para OCR rápido y nítido."""
     max_dim = 1600
     w, h = img_pil.size
     if max(w, h) > max_dim:
@@ -230,15 +252,13 @@ def optimizar_imagen_para_ia(img_pil):
 
 def llamar_gemini_rotativo(contents):
     ultimo_error = None
-    
-    # Límite exacto de razonamiento: 512 tokens (OCR preciso sin demoras)
     config_llamada = types.GenerateContentConfig(
         temperature=0.1,
         thinking_config=types.ThinkingConfig(thinking_budget=512)
     )
 
     for modelo in MODELOS_ROTACION:
-        for intento in range(2):
+        for _ in range(2):
             try:
                 resp = client.models.generate_content(
                     model=modelo, 
@@ -250,7 +270,6 @@ def llamar_gemini_rotativo(contents):
             except Exception as e:
                 err_str = str(e)
                 ultimo_error = e
-                # Salto silencioso ante 429, 503, 404 o 403
                 if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "404", "NOT_FOUND", "403", "PERMISSION_DENIED"]):
                     time.sleep(1.0)
                     break
@@ -269,54 +288,46 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
     hotel = config_sesion['hotel']
     servicio = config_sesion['servicio']
-    ruta = config_sesion.get('ruta', 'Oriente')
     tipo_op = config_sesion.get('tipo', 'HUESPEDES')
     key = config_sesion.get('key', '')
     
     es_wyndham_huespedes = (key == "wyndham_huespedes")
-    es_hilton = (key == "hilton")
-    es_fontana = (key == "fontana")
-    es_oceania = (key == "oceania")
-    es_bogotap_datos = (key == "bogotap_datos")
-    es_dann_emp = (key == "dann_empleados")
     es_lenceria = es_servicio_lista_limpia(config_sesion)
 
     prompt = f"""
     Eres el auditor contable oficial de Lavaarte Lavandería SAS.
     Operación activa: Hotel '{hotel}', Servicio '{servicio}', Clave: '{key}'.
     
-    REGLAS ESTRICTAS Y AISLADAS POR HOTEL:
+    REGLAS ESTRICTAS Y HOMOLOGACIÓN BLINDADA:
     
     1. REGLA ESTRICTA WYNDHAM HUÉSPEDES (wyndham_huespedes):
        - ¿Es Wyndham Huéspedes?: {es_wyndham_huespedes}
-       - EXCLUSIÓN TOTAL DE EMPLEADOS: Los empleados pagan de contado en caja diariamente. Si la lista contiene bloques, firmas o nombres propios de personas que son empleados (sin número de habitación de hotel), IGNORA Y DESCARTA POR COMPLETO esos nombres y todas las prendas asociadas a ellos.
-       - PROCESAR ÚNICAMENTE HABITACIONES NUMÉRICAS DE HUÉSPEDES (ej: 204, 315, 501).
-       - PRIORIDAD AL PRIMER ÍTEM LEÍDO: Si una anotación describe una prenda compuesta o ambigua como '1 blusa de pijama', '1 pantalón de sudadera', clasifícala SIEMPRE por el PRIMER sustantivo/prenda mencionado ('Blusa/Blouse').
-       - UNIFICACIÓN Y SUMA DE PRENDAS IDÉNTICAS: Si dentro de una misma habitación anotan prendas iguales ('1 pantalón verde' y '1 pantalón azul'), unifícalas en un solo registro ('Pantalón/Pants', cantidad 2).
+       - EXCLUSIÓN TOTAL DE EMPLEADOS: Si la lista describe empleados por nombre sin habitación numérica de hotel, DESCÁRTALOS por completo junto con sus prendas.
+       - HABITACIONES NUMÉRICAS ÚNICAMENTE (ej: 204, 315, 501).
+       - REGLA OBLIGATORIA LEGGINS: Los leggins, leggings o licras deportivas DEBEN registrarse como 'Pantalón/Pants' (Código 25, Lavado en seco, $5.950).
+       - REGLA OBLIGATORIA TOP: Los tops, crop top o similares DEBEN registrarse como 'Brassiere/Brassiere' (Código 4, Lavado, $3.500).
+       - UNIFICACIÓN Y SUMA DE PRENDAS IDÉNTICAS: Si en una misma habitación anotan prendas iguales ('1 pantalón verde' y '1 pantalón azul'), unifícalas en un solo registro ('Pantalón/Pants', cantidad 2).
 
-    2. REGLA HILTON:
-       - Ignora cualquier número de remisión.
-       - Descarta y excluye empleados sin habitación.
+    2. REGLA OCEANÍA / FONTANA / LENCERÍA:
+       - 'ajustable sensilla', 'ajustable sencilla', 'sensillo' -> 'Sábana ajustable sencilla'.
+       - 'cojin', 'cojín', 'cojines' -> 'Cojín'.
+       - 'fundas', 'funda' -> 'Funda'.
+       - 'facial', 'toalla facial' -> 'FACIAL'.
+       - 'protector colchon' -> 'PROTECTOR DE COLCHON'.
+       - 'cortesia' -> 'Sábana cortesía'.
+       - Toallas: 'Toalla cuerpo', 'Toalla mano', 'Toalla tapete'.
 
-    3. REGLAS WYNDHAM LENCERÍA / FONTANA / OCEANIA:
-       - FACIAL: Cualquier toalla facial, facial pequeña o similar clasifícala estrictamente como 'FACIAL'.
-       - PROTECTOR: 'protector colchon', 'protector de colchón' clasifícalo estrictamente como 'PROTECTOR DE COLCHON'.
-       - CORTESÍA: 'cortesía', 'cortesia' o 'toalla cortesia' clasifícalo estrictamente como 'Sábana cortesía'.
-       - TOALLAS: Clasifica como 'Toalla cuerpo', 'Toalla mano' y 'Toalla tapete'.
+    3. REGLA BOGOTÁ PLAZA UNIFORMES / SUITE MANTELERÍA / DANN EMPLEADOS:
+       - Bogotá Plaza Uniformes (bogotap_datos): Detectar Cargo + Prenda (ej: 'MESERO(EV) CHAQUETA').
+       - Suite Mantelería: Rango de filas 3 a 18.
+       - Dann Empleados: Código o nombre asignado como identificador.
 
-    4. REGLAS BOGOTÁ PLAZA UNIFORMES / SUITE MANTELERÍA / DANN LENCERÍA:
-       - Si es Bogotá Plaza Uniformes (bogotap_datos): Los textos son compuestos de Cargo + Prenda (ej: 'MESERO(EV) CHAQUETA'). Detecta ambos componentes.
-       - Suite Mantelería: Rango estricto de filas 3 a 18. No crear filas abajo.
+    4. GENERAL:
+       - 'remision': Número de remisión (Hampton obligatorio en Col B; Hilton vacío).
+       - 'habitacion': Número de habitación o persona.
+       - 'extra': 'Sí' o 'No'.
 
-    5. REGLAS DANN EMPLEADOS:
-       - Persona con nombre o código (ej: '13-514'). Asigna dicho identificador en la columna habitación/persona.
-
-    6. REGLAS GENERALES:
-       - 'remision': Número de remisión (Hampton en Columna B; Hilton vacío).
-       - 'habitacion': Número de habitación, nombre de empleado o código.
-       - 'extra': 'Sí' o 'No' según recargo.
-
-    CATÁLOGO DE REFERENCIA:
+    CATÁLOGO GLOBAL:
     {CATALOGO_GLOBAL}
     
     {f"AJUSTE DEL USUARIO: {correccion_usuario}" if correccion_usuario else ""}
@@ -357,7 +368,23 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
 
     if isinstance(filas, list):
         for f in filas:
-            f["prenda"] = homologar_prenda_telegram(f.get("prenda", ""), es_lenceria=es_lenceria)
+            f["prenda"] = homologar_prenda_telegram(
+                f.get("prenda", ""), 
+                es_lenceria=es_lenceria, 
+                es_wyndham_huespedes=es_wyndham_huespedes
+            )
+            # Doble blindaje: Re-asegurar código y precio para Leggins y Top en Wyndham
+            if es_wyndham_huespedes:
+                if f["prenda"] == "Pantalón/Pants":
+                    f["codigo"] = 25
+                    f["servicio"] = "Lavado en seco"
+                    f["valorUnitario"] = 5950
+                    f["valorTotal"] = a_entero(f.get("cantidad", 1)) * 5950
+                elif f["prenda"] == "Brassiere/Brassiere":
+                    f["codigo"] = 4
+                    f["servicio"] = "Lavado"
+                    f["valorUnitario"] = 3500
+                    f["valorTotal"] = a_entero(f.get("cantidad", 1)) * 3500
 
     if es_wyndham_huespedes and isinstance(filas, list):
         filas_consolidadas = {}
@@ -365,7 +392,6 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
             hab = str(f.get("habitacion", "")).strip()
             if not any(char.isdigit() for char in hab):
                 continue
-            
             cod = f.get("codigo", 0)
             extra = f.get("extra", "No")
             clave_unica = f"{hab}_{cod}_{extra}"
@@ -386,20 +412,19 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
 
 def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO", cuenta_destino="LAVAARTE", datos_existentes=None, ajuste_texto=None):
     fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
-    
     extra_contexto = ""
     if datos_existentes:
-        extra_contexto = f"\nDATOS PREVIAMENTE DETECTADOS: {json.dumps(datos_existentes, ensure_ascii=False)}\nCORRECCIÓN SOLICITADA POR EL USUARIO: {ajuste_texto}\nIMPORTANTE: Conserva todos los campos previos (especialmente 'valor') a menos que el usuario haya pedido cambiarlos explícitamente."
+        extra_contexto = f"\nDATOS PREVIAMENTE DETECTADOS: {json.dumps(datos_existentes, ensure_ascii=False)}\nCORRECCIÓN SOLICITADA: {ajuste_texto}\nIMPORTANTE: Conserva todos los campos previos a menos que el usuario pida cambiarlos explícitamente."
 
     if cuenta_destino == "CARLOS":
         prompt = f"""
         Eres el asistente financiero personal de Carlos Andrés Suárez.
         Analiza el comprobante, factura, recibo, audio o texto financiero de GASTO O INGRESO PERSONAL.
         Tipo de movimiento: {tipo_forzado}.
-        Fecha obligatoria: Si el usuario NO especifica una fecha explícita, usa SIEMPRE la fecha de hoy '{fecha_hoy}'.
+        Fecha obligatoria: Si no se especifica una fecha explícita, usa SIEMPRE la fecha de hoy '{fecha_hoy}'.
         Categorías: Alimentación, Transporte, Deporte / Ciclismo, Ocio / Cine, Hogar / Servicios, Salud, Ropa, Ahorro / Inversión, Otros.
         {extra_contexto}
-        Devuelve EXCLUSIVAMENTE un JSON con:
+        Devuelve EXCLUSIVAMENTE un JSON:
         {{
           "fecha": "{fecha_hoy}",
           "tipo": "{tipo_forzado}",
@@ -414,13 +439,14 @@ def analizar_financiero_ia(contenido_multimodal, tipo_forzado="EGRESO", cuenta_d
         Eres el asistente contable financiero de Lavaarte Lavandería SAS.
         Analiza el comprobante, factura, recibo, audio o texto financiero.
         Tipo de movimiento: {tipo_forzado}.
-        Fecha obligatoria: Si el usuario NO menciona una fecha específica en el texto o foto, usa SIEMPRE la fecha de hoy '{fecha_hoy}'.
+        Fecha obligatoria: Si no se menciona una fecha explícita, usa SIEMPRE la fecha de hoy '{fecha_hoy}'.
+        Categorías: Combustible / Insumos Químicos / Mantenimiento / Servicios Públicos / Nómina / Papelería / Arriendo / Facturación Hoteles / Servicios Mostrador / Otros.
         {extra_contexto}
-        Devuelve EXCLUSIVAMENTE un JSON con:
+        Devuelve EXCLUSIVAMENTE un JSON:
         {{
           "fecha": "{fecha_hoy}",
           "tipo": "{tipo_forzado}",
-          "categoria": "Combustible / Insumos Químicos / Mantenimiento / Servicios Públicos / Nómina / Papelería / Arriendo / Facturación Hoteles / Servicios Mostrador / Otros",
+          "categoria": "Combustible / Insumos Químicos / etc.",
           "concepto": "Descripción clara",
           "tercero": "Proveedor o Cliente",
           "metodo_pago": "Efectivo / Transferencia Bancolombia / Nequi / Daviplata",
@@ -490,6 +516,22 @@ def menu_principal():
     )
     markup.add(
         InlineKeyboardButton("💸 Control Financiero (Gastos / Ingresos)", callback_data="menu_financiero")
+    )
+    return markup
+
+def menu_post_consulta():
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("✏️ Corregir / Modificar Este Registro", callback_data="corregir_desde_consulta"),
+        InlineKeyboardButton("🏠 Menú Principal", callback_data="menu_inicio")
+    )
+    return markup
+
+def menu_confirmacion_firma(hotel_key):
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("📸 Adjuntar Foto de la Firma", callback_data="adjuntar_foto_firma"),
+        InlineKeyboardButton("⏩ Omitir Firma por Ahora", callback_data="omitir_firma")
     )
     return markup
 
@@ -650,7 +692,7 @@ def cmd_start(m):
 def saludo_texto(m):
     cmd_start(m)
 
-@bot.callback_query_handler(func=lambda call: call.data in ['menu_inicio', 'ruta_oriente', 'ruta_norte', 'modo_consulta', 'modo_corregir', 'menu_financiero'])
+@bot.callback_query_handler(func=lambda call: call.data in ['menu_inicio', 'ruta_oriente', 'ruta_norte', 'modo_consulta', 'modo_corregir', 'menu_financiero', 'corregir_desde_consulta'])
 def manejar_menu_principal(call):
     chat_id = call.message.chat.id
     if call.data == 'menu_inicio':
@@ -662,10 +704,10 @@ def manejar_menu_principal(call):
         bot.edit_message_text("🧭 *RUTA NORTE* - Selecciona el hotel:", chat_id, call.message.message_id, reply_markup=menu_hoteles_norte(), parse_mode='Markdown')
     elif call.data == 'modo_consulta':
         sesiones[chat_id] = {"modo": "CONSULTA"}
-        bot.edit_message_text("🔍 *MODO AUDITORÍA / CONSULTAS CON IA*\n\nEscribe tu pregunta en lenguaje natural.", chat_id, call.message.message_id, parse_mode='Markdown')
-    elif call.data == 'modo_corregir':
-        sesiones[chat_id] = {"modo": "CORREGIR"}
-        bot.edit_message_text("✏️ *MODO CORRECCIÓN DE REGISTRO*\n\nEscribe el ajuste que deseas realizar de forma explícita.", chat_id, call.message.message_id, parse_mode='Markdown')
+        bot.edit_message_text("🔍 *AUDITORÍA Y CONSULTAS CON IA EN TIEMPO REAL*\n\nPuedes preguntarme cualquier detalle contable u operativo.\n\nEjemplos:\n- _'¿Quién entregó lencería en Oceanía el 10 de septiembre?'_\n- _'¿Cuántas prendas se despacharon a Wyndham hoy?'_\n- _'Revisar las habitaciones del reporte de Hilton'_", chat_id, call.message.message_id, parse_mode='Markdown')
+    elif call.data in ['modo_corregir', 'corregir_desde_consulta']:
+        sesiones[chat_id]["modo"] = "CORREGIR_REGISTRO_BD"
+        bot.edit_message_text("✏️ *MODO CORRECCIÓN UNIVERSAL EN TIEMPO REAL*\n\nIndícame qué dato deseas cambiar de cualquier hotel o fecha.\n\nEjemplos:\n- _'En Oceanía día 10 cambiar toalla cuerpo de 15 a 18'_\n- _'En Wyndham habitación 304 cambiar cantidad de 2 a 1 pantalón'_\n- _'Corregir habitación 501 por 502 en Hilton hoy'_", chat_id, call.message.message_id, parse_mode='Markdown')
     elif call.data == 'menu_financiero':
         sesiones[chat_id] = {"modulo": "FINANCIERO"}
         bot.edit_message_text("💸 *MÓDULO DE CONTROL FINANCIERO*\n\n¿Qué tipo de movimiento deseas registrar?", chat_id, call.message.message_id, reply_markup=menu_financiero(), parse_mode='Markdown')
@@ -802,7 +844,6 @@ def iniciar_recepcion(call):
     sesiones[chat_id]["key"] = key
     sesiones[chat_id]["movimiento"] = "RECEPCIÓN"
     sesiones[chat_id]["paso_custodia"] = "REC_QUIEN_ENTREGA_HOTEL"
-    
     bot.send_message(chat_id, "📥 *RECEPCIÓN EN HOTEL - " + str(cfg['hotel']) + "*\n\n1️⃣ ¿Quién entrega la ropa por parte del hotel? (Escribe nombre y cargo):", parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data in ['accion_seguir', 'menu_inicio'])
@@ -813,6 +854,15 @@ def manejar_post_guardado(call):
         bot.send_message(chat_id, "📸 Envíame los siguientes datos para *" + str(cfg.get('hotel', '')) + "*.", parse_mode='Markdown')
     else:
         cmd_start(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data in ['adjuntar_foto_firma', 'omitir_firma'])
+def manejar_opcion_firma(call):
+    chat_id = call.message.chat.id
+    if call.data == 'adjuntar_foto_firma':
+        sesiones[chat_id]["paso_custodia"] = "SUBIR_FOTO_FIRMA"
+        bot.send_message(chat_id, "📸 *Toma una foto clara de la firma de la camarera / recepcionista y envíala:*", parse_mode='Markdown')
+    else:
+        bot.send_message(chat_id, "✅ Entrega finalizada sin firma fotográfica.", reply_markup=menu_principal())
 
 def procesar_lote_fotos(chat_id):
     with lock:
@@ -825,6 +875,40 @@ def procesar_lote_fotos(chat_id):
             
     cfg = sesiones.get(chat_id, ARBOL_SERVICIOS["wyndham_huespedes"])
     
+    # 1. SUBIR FOTO DE FIRMA DIGITAL A GOOGLE DRIVE
+    if cfg.get("paso_custodia") == "SUBIR_FOTO_FIRMA":
+        bot.send_message(chat_id, "✍️ Guardando firma digital en Google Drive de Lavaarte...", parse_mode='Markdown')
+        try:
+            img_firma = imgs[0]
+            buf = io.BytesIO()
+            img_firma.save(buf, format="JPEG", quality=90)
+            b64_firma = base64.b64encode(buf.getvalue()).decode('utf-8')
+            
+            payload = {
+                "accion": "GUARDAR_FIRMA_ENTREGA",
+                "hotel": cfg.get("hotel", "Hotel"),
+                "ruta": cfg.get("ruta", "Oriente"),
+                "fecha": datetime.datetime.now().strftime("%Y-%m-%d"),
+                "hora": datetime.datetime.now().strftime("%I-%M-%p"),
+                "firma_base64": b64_firma,
+                "recibido_por": cfg.get("recibido_por_hotel", "Personal Hotel")
+            }
+            resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=40).json()
+            
+            if resp.get("status") == "SUCCESS":
+                txt_f = f"✅ *¡FIRMA ARCHIVADA EN GOOGLE DRIVE!*\n\n"
+                txt_f += f"📁 *Archivo:* `{resp.get('nombre_archivo')}`\n"
+                txt_f += f"🔗 [Ver Firma en Drive]({resp.get('url_firma')})\n"
+                bot.send_message(chat_id, txt_f, parse_mode='Markdown')
+            else:
+                bot.send_message(chat_id, "⚠️ Error guardando firma: " + str(resp.get("mensaje")))
+            sesiones[chat_id] = {}
+            bot.send_message(chat_id, "¿Qué deseas hacer ahora?", reply_markup=menu_principal())
+        except Exception as e:
+            bot.send_message(chat_id, "❌ Error guardando firma: " + str(e))
+        return
+
+    # 2. PROCESAMIENTO FINANCIERO
     if cfg.get("modulo") == "FINANCIERO":
         bot.send_message(chat_id, "🧾 Analizando comprobante financiero con IA...", parse_mode='Markdown')
         try:
@@ -858,7 +942,8 @@ def procesar_lote_fotos(chat_id):
             bot.send_message(chat_id, "❌ Error analizando comprobante: " + str(e))
         return
 
-    bot.send_message(chat_id, "🔍 Procesando " + str(len(imgs)) + " foto(s) con reglas específicas de hotel...", parse_mode='Markdown')
+    # 3. PROCESAMIENTO OPERATIVO GENERAL
+    bot.send_message(chat_id, "🔍 Procesando " + str(len(imgs)) + " foto(s) con homologación blindada...", parse_mode='Markdown')
     try:
         filas = analizar_con_ia(imgs, cfg)
         sesiones[chat_id]["filas"] = filas
@@ -871,7 +956,7 @@ def procesar_lote_fotos(chat_id):
 @bot.message_handler(content_types=['photo'])
 def recibir_fotos(message):
     chat_id = message.chat.id
-    if chat_id not in sesiones or (not sesiones[chat_id].get("hotel") and sesiones[chat_id].get("modulo") != "FINANCIERO"):
+    if chat_id not in sesiones or (not sesiones[chat_id].get("hotel") and sesiones[chat_id].get("modulo") != "FINANCIERO" and sesiones[chat_id].get("paso_custodia") != "SUBIR_FOTO_FIRMA"):
         sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
         
     file_info = bot.get_file(message.photo[-1].file_id)
@@ -937,6 +1022,7 @@ def confirmar_guardado(m):
     chat_id = m.chat.id
     ses = sesiones.get(chat_id, {})
     
+    # CONFIRMAR FINANCIERO (LAVAARTE O CARLOS)
     if ses.get("movimiento_fin_pendiente"):
         m_fin = ses["movimiento_fin_pendiente"]
         cuenta = ses.get("cuenta_destino", "LAVAARTE")
@@ -974,7 +1060,6 @@ def confirmar_guardado(m):
                     "movimiento_financiero": m_fin
                 }
                 resp_raw = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=45)
-                
                 try:
                     resp = resp_raw.json()
                 except Exception:
@@ -994,12 +1079,14 @@ def confirmar_guardado(m):
             bot.reply_to(m, "❌ Error registrando financiero: " + str(e))
         return
 
+    # CONFIRMAR PRENDAS OPERATIVAS
     if ses.get("filas"):
         cfg = ses
         filas = cfg["filas"]
         tipo_op = filas[0].get("tipo_operacion_detectada", cfg.get("tipo", "HUESPEDES"))
+        hora_bogota = datetime.datetime.now().strftime("%I:%M %p")
         
-        bot.reply_to(m, "⏳ Guardando datos y registrando custodia (con hora de Bogotá)...", parse_mode='Markdown')
+        bot.reply_to(m, f"⏳ Guardando datos y registrando custodia (Hora Bogotá: {hora_bogota})...", parse_mode='Markdown')
         try:
             dia_actual = datetime.datetime.now().day
             if filas and filas[0].get('fecha'):
@@ -1016,6 +1103,7 @@ def confirmar_guardado(m):
                 "movimiento": cfg.get("movimiento", "RECEPCIÓN"),
                 "responsable_lavaarte": cfg.get("resp_lavaarte", "Conductor Lavaarte"),
                 "responsable_hotel": cfg.get("resp_hotel", "Recepción / Ama de llaves"),
+                "hora_sellada": hora_bogota,
                 "dia": dia_actual,
                 "filas": filas
             }
@@ -1025,7 +1113,7 @@ def confirmar_guardado(m):
             
             if resp_raw.status_code == 200 and data_resp.get("status") == "SUCCESS":
                 hoja_dest = data_resp.get("hoja_guardada", cfg['hotel'])
-                bot.reply_to(m, "✅ *¡Datos guardados con éxito!*\n📋 Registrado en: `" + str(hoja_dest) + "`\n⏱️ Auditoría generada en `TIEMPOS` y `RECEPCION_ENTREGA` (Hora Colombia OK).", parse_mode='Markdown')
+                bot.reply_to(m, f"✅ *¡Datos guardados con éxito!*\n📋 Registrado en: `{hoja_dest}`\n⏱️ Hora sellada oficial: *{hora_bogota}*\n⏱️ Auditoría generada en `TIEMPOS` y `RECEPCION_ENTREGA`.", parse_mode='Markdown')
                 sesiones[chat_id]["filas"] = []
                 bot.send_message(chat_id, "¿Qué deseas hacer a continuación?", reply_markup=menu_post_guardado())
             else:
@@ -1048,8 +1136,66 @@ def procesar_texto_general(m):
     chat_id = m.chat.id
     ses = sesiones.get(chat_id, {})
     paso = ses.get("paso_custodia")
+    modo = ses.get("modo")
     
-    # 1. CORRECCIÓN O INGRESO FINANCIERO
+    # 1. MODO CONSULTA / AUDITORÍA IA
+    if modo == "CONSULTA":
+        bot.reply_to(m, "🔍 Consultando libros y bases de datos con IA...", parse_mode='Markdown')
+        try:
+            payload = {
+                "accion": "AUDITORIA_CONSULTA_UNIVERSAL",
+                "pregunta": m.text
+            }
+            resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=45).json()
+            
+            if resp.get("status") == "SUCCESS":
+                txt_r = f"📊 *INFORME DE AUDITORÍA:*\n\n{resp.get('respuesta')}\n\n"
+                txt_r += "❓ *¿Qué deseas hacer con esta información?*"
+                bot.send_message(chat_id, txt_r, reply_markup=menu_post_consulta(), parse_mode='Markdown')
+            else:
+                bot.reply_to(m, "ℹ️ " + str(resp.get("mensaje", "No se encontraron datos coincidentes.")))
+        except Exception as e:
+            bot.reply_to(m, "❌ Error en auditoría: " + str(e))
+        return
+
+    # 2. MODO CORRECCIÓN UNIVERSAL EN TIEMPO REAL
+    if modo == "CORREGIR_REGISTRO_BD":
+        bot.reply_to(m, "⚙️ Aplicando modificación en tiempo real a Google Sheets...", parse_mode='Markdown')
+        try:
+            prompt_mod = f"""
+            Eres el auditor contable de Lavaarte. El usuario solicita modificar un registro en la base de datos de Google Sheets:
+            Instrucción: '{m.text}'.
+            Devuelve un JSON estricto:
+            {{
+              "hotel": "Oceania / Wyndham / etc.",
+              "hoja": "OCEANIA_DATOS / WYNDHAM_HUESPEDES_DATOS / etc.",
+              "dia": 10,
+              "habitacion": "304 / general",
+              "prenda": "Toalla cuerpo",
+              "campo_modificar": "cantidad / habitacion / prenda",
+              "nuevo_valor": 18
+            }}
+            """
+            texto_raw = llamar_gemini_rotativo([prompt_mod])
+            mod_data = json.loads(texto_raw.strip().replace("```json", "").replace("```", "").strip())
+            
+            payload = {
+                "accion": "CORREGIR_DATO_BD",
+                "modificacion": mod_data,
+                "texto_original": m.text
+            }
+            resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=45).json()
+            
+            if resp.get("status") == "SUCCESS":
+                bot.send_message(chat_id, f"✅ *¡REGISTRO ACTUALIZADO EN TIEMPO REAL!*\n\n{resp.get('mensaje')}", reply_markup=menu_principal(), parse_mode='Markdown')
+                sesiones[chat_id] = {}
+            else:
+                bot.reply_to(m, "⚠️ No se pudo aplicar: " + str(resp.get("mensaje")))
+        except Exception as e:
+            bot.reply_to(m, "❌ Error corrigiendo registro: " + str(e))
+        return
+
+    # 3. CORRECCIÓN O INGRESO FINANCIERO
     if ses.get("modulo") == "FINANCIERO":
         tipo_mov = ses.get("tipo_fin", "EGRESO")
         cuenta = ses.get("cuenta_destino", "LAVAARTE")
@@ -1104,7 +1250,7 @@ def procesar_texto_general(m):
             bot.reply_to(m, "❌ Error analizando texto financiero: " + str(e))
         return
 
-    # PASOS DE CUSTODIA
+    # 4. PASOS DE CUSTODIA Y CONFIRMACIÓN DE ENTREGA
     if paso == "RESP_LAVAARTE_DESPACHO":
         ses["resp_lavaarte"] = m.text.strip()
         ses["resp_hotel"] = "Por entregar en hotel"
@@ -1115,7 +1261,9 @@ def procesar_texto_general(m):
     if paso == "CONFIRMAR_QUIEN_RECIBE_HOTEL":
         quien_recibe = m.text.strip()
         desp = ses.get("despacho_pendiente", {})
-        bot.reply_to(m, "⏳ Confirmando entrega detallada en Google Sheets...")
+        hora_bogota = datetime.datetime.now().strftime("%I:%M %p")
+        
+        bot.reply_to(m, "⏳ Confirmando entrega y generando sello de hora en Google Sheets...")
         try:
             payload = {
                 "accion": "CONFIRMAR_ENTREGA_HOTEL",
@@ -1125,20 +1273,24 @@ def procesar_texto_general(m):
                 "total_prendas": desp.get("total_prendas", 0),
                 "responsable_lavaarte": desp.get("despachado_por", "Conductor"),
                 "responsable_hotel": quien_recibe,
+                "hora_sellada": hora_bogota,
                 "detalle_resumen": f"Entregado a {quien_recibe}. Total prendas: {desp.get('total_prendas')}."
             }
             resp = requests.post(URL_APPS_SCRIPT, data=json.dumps(payload), headers={'Content-Type': 'application/json'}, timeout=40).json()
             if resp.get("status") == "SUCCESS":
+                ses["recibido_por_hotel"] = quien_recibe
+                ses["paso_custodia"] = "SUBIR_FOTO_FIRMA"
+                
                 txt_ok = f"🤝 *¡ENTREGA CONFIRMADA EXITOSAMENTE!*\n\n"
                 txt_ok += f"🏨 *Hotel:* {ses.get('hotel')}\n"
                 txt_ok += f"👤 *Entregado por:* {desp.get('despachado_por')}\n"
                 txt_ok += f"✍️ *Recibido por:* {quien_recibe}\n"
                 txt_ok += f"📊 *Prendas entregadas:* {desp.get('total_prendas')}\n"
-                txt_ok += f"⏱️ *Hora sellada (Bogotá):* {datetime.datetime.now().strftime('%I:%M %p')}\n\n"
-                txt_ok += "Guardado en `RECEPCION_ENTREGA` y `TIEMPOS` con detalle completo."
-                bot.send_message(chat_id, txt_ok, parse_mode='Markdown')
-                sesiones[chat_id] = {}
-                bot.send_message(chat_id, "Selecciona una nueva opción:", reply_markup=menu_principal())
+                txt_ok += f"⏱️ *Hora sellada oficial (Bogotá):* *{hora_bogota}*\n\n"
+                txt_ok += "📝 *RESPALDO DE SEGURIDAD (FIRMA DIGITAL):*\n"
+                txt_ok += "¿Deseas capturar y archivar la firma de la persona que recibió en Google Drive?"
+                
+                bot.send_message(chat_id, txt_ok, reply_markup=menu_confirmacion_firma(ses.get("key", "hotel")), parse_mode='Markdown')
             else:
                 bot.reply_to(m, "⚠️ Error: " + str(resp.get("mensaje")))
         except Exception as e:
@@ -1157,7 +1309,7 @@ def procesar_texto_general(m):
         bot.reply_to(m, f"✅ Recibe por Lavaarte: *{m.text.strip()}*\n\n📸 *¡Listo!* Ya puedes enviar las fotos de las planillas, notas de voz o texto de la ropa recibida:", parse_mode='Markdown')
         return
 
-    # CORRECCIÓN DE PRENDAS
+    # 5. CORRECCIÓN DE PRENDAS PREVIO A CONFIRMAR
     if ses.get("filas"):
         bot.reply_to(m, "⚙️ Aplicando ajustes a la lista...")
         try:
@@ -1170,6 +1322,7 @@ def procesar_texto_general(m):
             bot.reply_to(m, "❌ Error aplicando cambio: " + str(e))
         return
 
+    # 6. INGRESO DE PRENDAS POR TEXTO DIRECTO
     if not ses.get("hotel"):
         sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
         
