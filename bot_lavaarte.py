@@ -1,6 +1,6 @@
 # =========================================================================
 # BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
-# MODELOS 100% FLASH + HOMOLOGACIÓN BLINDADA (OCEANÍA / WYNDHAM / SÁBANAS)
+# MODELOS 100% FLASH + HOMOLOGACIÓN AISLADA POR HOTEL (FONTANA / OCEANÍA / WYNDHAM)
 # GESTIÓN FINANCIERA (LAVAARTE + CARLOS) + FIRMAS DIGITALES DRIVE + HORA BOGOTÁ
 # =========================================================================
 
@@ -52,10 +52,6 @@ def obtener_ahora_bogota():
         return utc_now - datetime.timedelta(hours=5)
 
 def ejecutar_post_apps_script(url, payload, timeout=60):
-    """
-    Ejecuta POST a Apps Script controlando redirecciones 302 y evitando el error:
-    Expecting value: line 1 column 1 (char 0)
-    """
     for intento in range(3):
         try:
             resp = requests.post(
@@ -216,11 +212,12 @@ def limpiar_texto_simple(txt):
     txt = ''.join(c for c in txt if unicodedata.category(c) != 'Mn')
     return txt.lower().strip()
 
-def homologar_prenda_telegram(nombre_prenda, es_lenceria=False, es_wyndham_huespedes=False, es_manteleria=False):
+def homologar_prenda_telegram(nombre_prenda, hotel_nom="", es_lenceria=False, es_wyndham_huespedes=False, es_manteleria=False):
     norm = limpiar_texto_simple(nombre_prenda)
+    hotel_clean = limpiar_texto_simple(hotel_nom)
     
-    # 1. REGLA WYNDHAM MANTELERÍA
-    if es_manteleria or "manteleria" in norm:
+    # 1. REGLA MANTELERÍA (WYNDHAM / SUITE)
+    if es_manteleria or "manteleria" in hotel_clean:
         if "blanco" in norm or norm == "mantel blanco":
             return "Mantel blanco"
         if "azul" in norm or norm == "mantel azul":
@@ -228,55 +225,66 @@ def homologar_prenda_telegram(nombre_prenda, es_lenceria=False, es_wyndham_huesp
         if "servilleta" in norm or "servilletas" in norm:
             return "Servilleta"
 
-    # 2. REGLA ESTRICTA WYNDHAM HUÉSPEDES
-    if es_wyndham_huespedes or "wyndham" in norm:
+    # 2. WYNDHAM HUÉSPEDES
+    if es_wyndham_huespedes or "wyndham" in hotel_clean:
         if any(w in norm for w in ["leggin", "leggis", "licra", "pantalon de licra", "malla"]):
             return "Pantalón/Pants"
         if any(w in norm for w in ["top", "crop top", "crop", "bra", "corpin"]):
             return "Brassiere/Brassiere"
 
-    # 3. REGLA OCEANÍA: AJUSTABLE DOBLE VS AJUSTABLE SENCILLA (ESTRICTA)
-    if "ajustable" in norm:
-        if any(w in norm for w in ["doble", "semidoble", "king", "queen", "2 plazas"]):
-            return "Sábana ajustable doble"
-        if any(w in norm for w in ["sensill", "sencill", "individual", "1 plaza"]):
-            return "Sábana ajustable sencilla"
-        return "Sábana ajustable"
+    # 3. REGLA FONTANA (AISLADA - CERO FACIAL, MANO = TOALLA MANO, SÁBANA/SOBRESÁBANA)
+    if "fontana" in hotel_clean:
+        if "mano" in norm:
+            return "Toalla mano"
+        if any(w in norm for w in ["sobresabana", "lisa", "sabana"]):
+            if "cortesia" not in norm and "ajustable" not in norm:
+                return "Sábana"
+        if "ajustable" in norm:
+            return "Ajustable"
+        if "cuerpo" in norm:
+            return "Toalla cuerpo"
+        if "tapete" in norm:
+            return "Toalla tapete"
 
-    # 4. REGLA UNIVERSAL SÁBANAS (LISA, PLANA, SABANA, SOBRESABANA)
-    if any(w in norm for w in ["lisa", "plana", "sabana", "sobresabana"]):
-        if "cortesia" in norm:
-            return "Sábana cortesía"
-        if "ajustable" not in norm:
+    # 4. REGLA OCEANÍA (AISLADA - DOBLE VS SENCILLA)
+    if "oceania" in hotel_clean:
+        if "ajustable" in norm:
             if any(w in norm for w in ["doble", "semidoble", "king", "queen"]):
-                return "Sábana plana doble"
-            if any(w in norm for w in ["sensill", "sencill", "individual"]):
+                return "Sábana ajustable doble"
+            return "Sábana ajustable sencilla"
+        if any(w in norm for w in ["sobresabana", "plana", "lisa", "sabana"]):
+            if "cortesia" not in norm and "ajustable" not in norm:
+                if any(w in norm for w in ["doble", "semidoble", "king", "queen"]):
+                    return "Sábana plana doble"
                 return "Sábana plana sencilla"
-            return "Sábana plana"
+        if "cojin" in norm or "cojines" in norm:
+            return "Cojín"
+        if norm in ["funda", "fundas"]:
+            return "Funda"
 
-    # 5. COJÍN (con o sin tilde)
-    if "cojin" in norm or "cojines" in norm:
-        return "Cojín"
-
-    # 6. FUNDA / FUNDAS
-    if norm in ["funda", "fundas", "funda de almohada", "fundas de almohada"]:
-        return "Funda"
-
-    # 7. FACIAL / PROTECTOR / CORTESÍA
+    # 5. REGLA EXCLUSIVA FACIAL (SOLO WYNDHAM LENCERÍA)
     if "facial" in norm:
-        return "FACIAL"
+        if "wyndham" in hotel_clean:
+            return "FACIAL"
+        return "Toalla mano"
+
+    # 6. PROTECTOR Y CORTESÍA GENERAL
     if "protector" in norm and "colchon" in norm:
         return "PROTECTOR DE COLCHON"
     if "cortesia" in norm:
         return "Sábana cortesía"
         
     if es_lenceria:
-        if norm in ["mano", "toalla mano", "toalla de mano", "toallas de mano", "toallas mano"]:
+        if any(w in norm for w in ["mano", "toalla mano", "toallas mano"]):
             return "Toalla mano"
-        if norm in ["cuerpo", "toalla cuerpo", "toalla de cuerpo", "toallas cuerpo", "toallas de cuerpo"]:
+        if any(w in norm for w in ["cuerpo", "toalla cuerpo", "toallas cuerpo"]):
             return "Toalla cuerpo"
-        if norm in ["tapete", "toalla tapete", "toallas tapete"]:
+        if any(w in norm for w in ["tapete", "toalla tapete", "toallas tapete"]):
             return "Toalla tapete"
+        if "cojin" in norm or "cojines" in norm:
+            return "Cojín"
+        if norm in ["funda", "fundas"]:
+            return "Funda"
             
     return nombre_prenda
 
@@ -355,29 +363,35 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     Eres el auditor contable oficial de Lavaarte Lavandería SAS.
     Operación activa: Hotel '{hotel}', Servicio '{servicio}', Clave: '{key}'.
     
-    REGLAS ESTRICTAS Y HOMOLOGACIÓN BLINDADA:
+    REGLAS ESTRICTAS Y AISLADAS POR HOTEL (NO MEZCLAR REGLAS ENTRE HOTELES):
     
-    1. WYNDHAM HUÉSPEDES (wyndham_huespedes):
-       - EXCLUSIÓN DE EMPLEADOS: Si la lista describe empleados por nombre sin número de habitación, descártalos.
-       - HABITACIONES ADMITIDAS: Acepta habitaciones numéricas (ej: 204, 315) Y TAMBIÉN HABITACIONES DESIGNADAS COMO 'N.N' o 'NN'.
+    1. HOTEL FONTANA:
+       - En Fontana NO EXISTE 'FACIAL'. 'mano', 'toalla de mano' es ESTRICTAMENTE 'Toalla mano'.
+       - 'ajustable' se clasifica como 'Ajustable' (NUNCA agregar la palabra 'sencilla').
+       - 'sobresabana', 'sabana', 'lisa' se clasifica como 'Sábana'.
+
+    2. HOTEL OCEANÍA:
+       - 'ajustable doble' -> 'Sábana ajustable doble'.
+       - 'ajustable sensilla' o 'ajustable' (sin especificar) -> 'Sábana ajustable sencilla'.
+       - 'sobresabana doble' -> 'Sábana plana doble'.
+       - 'sobresabana' (sin especificar) -> 'Sábana plana sencilla'.
+       - 'cojin' o 'cojines' -> 'Cojín'.
+       - 'funda' o 'fundas' -> 'Funda'.
+
+    3. WYNDHAM LENCERÍA:
+       - Es el ÚNICO hotel autorizado para clasificar 'FACIAL'.
+
+    4. WYNDHAM HUÉSPEDES (wyndham_huespedes):
+       - EXCLUSIÓN DE EMPLEADOS: Si la lista describe empleados por nombre sin habitación, descártalos.
+       - ACEPTA HABITACIONES NUMÉRICAS Y TAMBIÉN HABITACIONES 'N.N' o 'NN'.
        - REGLA LEGGINS: 'Pantalón/Pants' (Código 25, Lavado en seco, $5.950).
        - REGLA TOP: 'Brassiere/Brassiere' (Código 4, Lavado, $3.500).
        - UNIFICACIÓN Y SUMA DE PRENDAS IDÉNTICAS en la misma habitación.
 
-    2. REGLAS OCEANÍA Y LENCERÍA:
-       - 'ajustable doble' -> 'Sábana ajustable doble'.
-       - 'ajustable sensilla' / 'ajustable sencilla' -> 'Sábana ajustable sencilla'.
-       - 'lisa', 'plana', 'sabana', 'sobresabana' -> 'Sábana plana sencilla' o 'Sábana plana doble'.
-       - 'cojin', 'cojín', 'cojines' -> 'Cojín'.
-       - 'fundas', 'funda' -> 'Funda'.
-       - 'facial' -> 'FACIAL'.
-       - 'protector colchon' -> 'PROTECTOR DE COLCHON'.
-       - 'cortesia' -> 'Sábana cortesía'.
-
-    3. REGLA MANTELERÍA (WYNDHAM / SUITE):
+    5. MANTELERÍA (WYNDHAM / SUITE):
        - 'blanco' -> 'Mantel blanco'.
        - 'azul' -> 'Mantel azul'.
-       - 'servilleta', 'servilletas' -> 'Servilleta'.
+       - 'servilleta' -> 'Servilleta'.
 
     CATÁLOGO GLOBAL:
     {CATALOGO_GLOBAL}
@@ -422,6 +436,7 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
         for f in filas:
             f["prenda"] = homologar_prenda_telegram(
                 f.get("prenda", ""), 
+                hotel_nom=hotel,
                 es_lenceria=es_lenceria, 
                 es_wyndham_huespedes=es_wyndham_huespedes,
                 es_manteleria=es_manteleria
@@ -570,7 +585,6 @@ def menu_post_consulta():
     return markup
 
 def menu_firma_pantalla(hotel_nom):
-    """Genera el botón WebApp interactivo para firmar con el dedo en pantalla."""
     url_pantalla = f"{URL_APPS_SCRIPT}?hotel={requests.utils.quote(str(hotel_nom))}"
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(
@@ -905,9 +919,6 @@ def manejar_opcion_firma_callback(call):
     else:
         bot.send_message(chat_id, "✅ Entrega finalizada sin firma fotográfica.", reply_markup=menu_principal())
 
-# =========================================================================
-# RECEPTOR NATIVO DE FIRMA DIGITAL (TELEGRAM MINI APP EN PANTALLA)
-# =========================================================================
 @bot.message_handler(content_types=['web_app_data'])
 def recibir_firma_web_app(message):
     chat_id = message.chat.id
@@ -956,8 +967,9 @@ def procesar_lote_fotos(chat_id):
             
     cfg = sesiones.get(chat_id, ARBOL_SERVICIOS["wyndham_huespedes"])
     ahora_bog = obtener_ahora_bogota()
+    hotel_activo = cfg.get("hotel", "Hotel")
     
-    # 1. SUBIR FOTO DE FIRMA DIGITAL A GOOGLE DRIVE (FALLBACK FOTO)
+    # 1. SUBIR FOTO DE FIRMA DIGITAL (FALLBACK FOTO)
     if cfg.get("paso_custodia") == "SUBIR_FOTO_FIRMA":
         bot.send_message(chat_id, "✍️ Guardando firma digital en Google Drive (Firmas comprobantes)...", parse_mode='Markdown')
         try:
@@ -968,7 +980,7 @@ def procesar_lote_fotos(chat_id):
             
             payload = {
                 "accion": "GUARDAR_FIRMA_ENTREGA",
-                "hotel": cfg.get("hotel", "Hotel"),
+                "hotel": hotel_activo,
                 "ruta": cfg.get("ruta", "Oriente"),
                 "fecha": ahora_bog.strftime("%Y-%m-%d"),
                 "hora": ahora_bog.strftime("%I-%M-%p"),
@@ -1027,7 +1039,7 @@ def procesar_lote_fotos(chat_id):
         return
 
     # 3. PROCESAMIENTO OPERATIVO GENERAL
-    bot.send_message(chat_id, "🔍 Procesando " + str(len(imgs)) + " foto(s) con homologación blindada...", parse_mode='Markdown')
+    bot.send_message(chat_id, f"🔍 Procesando {len(imgs)} foto(s) para *{hotel_activo}*...", parse_mode='Markdown')
     try:
         filas = analizar_con_ia(imgs, cfg)
         sesiones[chat_id]["filas"] = filas
@@ -1177,6 +1189,7 @@ def confirmar_guardado(m):
             payload = {
                 "accion": "GUARDAR",
                 "ruta": cfg.get("ruta", "Oriente"),
+                "hotel": cfg.get("hotel", "Hotel"),
                 "destino": cfg["hoja"],
                 "tipo_operacion": tipo_op,
                 "movimiento": cfg.get("movimiento", "RECEPCIÓN"),
@@ -1405,7 +1418,7 @@ def procesar_texto_general(m):
         sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
         
     cfg = sesiones[chat_id]
-    bot.reply_to(m, "📝 Procesando texto para *" + str(cfg['hotel']) + "*...", parse_mode='Markdown')
+    bot.reply_to(m, f"📝 Procesando texto para *{cfg['hotel']}*...", parse_mode='Markdown')
     try:
         filas = analizar_con_ia([m.text], cfg)
         sesiones[chat_id]["filas"] = filas
@@ -1414,5 +1427,5 @@ def procesar_texto_general(m):
     except Exception as e:
         bot.reply_to(m, "❌ Error procesando texto: " + str(e))
 
-print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Homologación Blindada / Hora Bogotá OK / Firmas WebApp OK)")
+print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Homologación Aislada por Hotel / Hora Bogotá OK)")
 bot.infinity_polling()
