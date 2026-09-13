@@ -136,7 +136,7 @@ CATALOGO_GLOBAL = """
 35|Vestido baño|Lavado|11000
 36|Zapatos tenis/ Tenis Shoes|Lavado|16400
 
-[PRECIOS NORTE 2026 - HUÉSPEDES DANN / VIRREY / ANDES / BOGOTÁ PLAZA]
+[PRECIOS NORTE 2026 - HUÉSPEDES DANN / VIRREY / ANDES / BOGOTÁ PLAZA / HAMPTON]
 1|Abrigo/ Coat|Lavado en seco|19950
 2|Bata/Dress|Lavado en seco|19950
 3|Bermuda de vestir|Lavado|9918
@@ -363,32 +363,36 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     Eres el auditor contable oficial de Lavaarte Lavandería SAS.
     Operación activa: Hotel '{hotel}', Servicio '{servicio}', Clave: '{key}'.
     
-    REGLAS ESTRICTAS Y AISLADAS POR HOTEL (NO MEZCLAR REGLAS ENTRE HOTELES):
+    REGLAS ESTRICTAS Y AISLADAS POR HOTEL:
     
-    1. HOTEL FONTANA:
+    1. HOTEL HAMPTON (REGLA OBLIGATORIA SERVICIO):
+       - Identifica OBLIGATORIAMENTE el tipo de servicio: 'Lavado' o 'Lavado en seco' según el tipo de prenda (ej: camisa es Lavado, chaqueta o vestido es Lavado en seco).
+       - NUNCA devuelvas el campo 'servicio' vacío o nulo.
+       - Lee la remisión del huésped con total precisión.
+
+    2. HOTEL FONTANA:
        - En Fontana NO EXISTE 'FACIAL'. 'mano', 'toalla de mano' es ESTRICTAMENTE 'Toalla mano'.
-       - 'ajustable' se clasifica como 'Ajustable' (NUNCA agregar la palabra 'sencilla').
+       - 'ajustable' se clasifica como 'Ajustable' (sin añadir sencilla).
        - 'sobresabana', 'sabana', 'lisa' se clasifica como 'Sábana'.
 
-    2. HOTEL OCEANÍA:
+    3. HOTEL OCEANÍA:
        - 'ajustable doble' -> 'Sábana ajustable doble'.
-       - 'ajustable sensilla' o 'ajustable' (sin especificar) -> 'Sábana ajustable sencilla'.
+       - 'ajustable' o 'ajustable sensilla' -> 'Sábana ajustable sencilla'.
        - 'sobresabana doble' -> 'Sábana plana doble'.
-       - 'sobresabana' (sin especificar) -> 'Sábana plana sencilla'.
+       - 'sobresabana' -> 'Sábana plana sencilla'.
        - 'cojin' o 'cojines' -> 'Cojín'.
        - 'funda' o 'fundas' -> 'Funda'.
 
-    3. WYNDHAM LENCERÍA:
+    4. WYNDHAM LENCERÍA:
        - Es el ÚNICO hotel autorizado para clasificar 'FACIAL'.
 
-    4. WYNDHAM HUÉSPEDES (wyndham_huespedes):
+    5. WYNDHAM HUÉSPEDES (wyndham_huespedes):
        - EXCLUSIÓN DE EMPLEADOS: Si la lista describe empleados por nombre sin habitación, descártalos.
-       - ACEPTA HABITACIONES NUMÉRICAS Y TAMBIÉN HABITACIONES 'N.N' o 'NN'.
+       - ACEPTA HABITACIONES NUMÉRICAS Y HABITACIONES 'N.N' o 'NN'.
        - REGLA LEGGINS: 'Pantalón/Pants' (Código 25, Lavado en seco, $5.950).
        - REGLA TOP: 'Brassiere/Brassiere' (Código 4, Lavado, $3.500).
-       - UNIFICACIÓN Y SUMA DE PRENDAS IDÉNTICAS en la misma habitación.
 
-    5. MANTELERÍA (WYNDHAM / SUITE):
+    6. MANTELERÍA (WYNDHAM / SUITE):
        - 'blanco' -> 'Mantel blanco'.
        - 'azul' -> 'Mantel azul'.
        - 'servilleta' -> 'Servilleta'.
@@ -441,6 +445,10 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
                 es_wyndham_huespedes=es_wyndham_huespedes,
                 es_manteleria=es_manteleria
             )
+            # Garantiza servicio por defecto para evitar corridas
+            if not f.get("servicio") or f.get("servicio") == "":
+                f["servicio"] = "Lavado en seco" if any(w in f["prenda"].lower() for w in ["pantalón", "pantalon", "chaqueta", "vestido", "abrigo", "traje", "blazer"]) else "Lavado"
+
             if es_wyndham_huespedes:
                 if f["prenda"] == "Pantalón/Pants":
                     f["codigo"] = 25
@@ -690,7 +698,6 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
     resumen += "👤 *Responsable Lavaarte:* `" + str(r_lavaarte) + "`\n"
     resumen += "🏨 *Responsable Hotel:* `" + str(r_hotel) + "`\n"
     
-    # 1. EFICACIA DOTACIONES
     if es_eficacia:
         total_p = sum(item.get('cantidad', 0) for item in filas)
         resumen += "📊 *Total Dotaciones:* " + str(total_p) + " prendas\n"
@@ -703,7 +710,6 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
                 resumen += "\n🏢 *Empresa:* `" + cuenta_act + "`\n"
             resumen += "• " + str(it.get('prenda', '')) + " - Cant: *" + str(it.get('cantidad', 0)) + "*\n"
             
-    # 2. LENCERÍA, MANTELERÍA Y UNIFORMES
     elif es_limpio:
         total_p = sum(item.get('cantidad', 0) for item in filas)
         resumen += "📊 *Total Prendas:* " + str(total_p) + "\n"
@@ -712,7 +718,6 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
         for it in filas_ord:
             resumen += "• " + str(it.get('prenda', '')) + " - Cant: *" + str(it.get('cantidad', 0)) + "*\n"
             
-    # 3. HUÉSPEDES GENERALES
     else:
         total_factura = sum(item.get('valorTotal', 0) for item in filas)
         resumen += "💰 *Total Liquidado:* $" + f"{total_factura:,.2f}" + "\n"
@@ -728,11 +733,12 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
                 resumen += "\n🚪 *Habitación / Registro:* `" + hab_actual + "`" + rem_txt + tag_ex + "\n"
             p_cod = str(it.get('codigo', '-'))
             p_nom = str(it.get('prenda', ''))
+            p_srv = str(it.get('servicio', 'Lavado'))
             p_cant = str(it.get('cantidad', 0))
             p_unit = f"{it.get('valorUnitario', 0):,.2f}"
             p_tot = f"{it.get('valorTotal', 0):,.2f}"
             p_extra = str(it.get('extra', 'No'))
-            resumen += f"• [Cód {p_cod}] {p_nom} - Cant: {p_cant} - Unit: ${p_unit} - Total: ${p_tot} [Extra: {p_extra}]\n"
+            resumen += f"• [Cód {p_cod}] {p_nom} ({p_srv}) - Cant: {p_cant} - Unit: ${p_unit} - Total: ${p_tot} [Extra: {p_extra}]\n"
             
     resumen += "\n💬 *¿Qué deseas hacer?*\n"
     resumen += "• Escribe *SI* para guardar en Google Sheets.\n"
@@ -919,43 +925,6 @@ def manejar_opcion_firma_callback(call):
     else:
         bot.send_message(chat_id, "✅ Entrega finalizada sin firma fotográfica.", reply_markup=menu_principal())
 
-@bot.message_handler(content_types=['web_app_data'])
-def recibir_firma_web_app(message):
-    chat_id = message.chat.id
-    ses = sesiones.get(chat_id, {})
-    ahora_bog = obtener_ahora_bogota()
-
-    try:
-        data_web = json.loads(message.web_app_data.data)
-        if data_web.get("tipo") == "FIRMA_DIGITAL":
-            bot.send_message(chat_id, "✍️ Guardando firma digital en Google Drive (Firmas comprobantes)...", parse_mode='Markdown')
-            
-            payload = {
-                "accion": "GUARDAR_FIRMA_ENTREGA",
-                "hotel": ses.get("hotel", "Hotel"),
-                "ruta": ses.get("ruta", "Oriente"),
-                "fecha": ahora_bog.strftime("%Y-%m-%d"),
-                "hora": ahora_bog.strftime("%I-%M-%p"),
-                "firma_base64": data_web.get("firma_b64"),
-                "recibido_por": ses.get("recibido_por_hotel", "Personal Hotel")
-            }
-            resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=45)
-            
-            if resp.get("status") == "SUCCESS":
-                txt_f = f"✅ *¡FIRMA ARCHIVADA CON ÉXITO!*\n\n"
-                txt_f += f"📁 *Carpeta:* `Firmas comprobantes`\n"
-                txt_f += f"📄 *Archivo:* `{resp.get('nombre_archivo')}`\n"
-                if resp.get('url_firma'):
-                    txt_f += f"🔗 [Ver Firma en Google Drive]({resp.get('url_firma')})\n"
-                bot.send_message(chat_id, txt_f, parse_mode='Markdown')
-            else:
-                bot.send_message(chat_id, "⚠️ No se pudo archivar la firma: " + str(resp.get("mensaje")))
-                
-            sesiones[chat_id] = {}
-            bot.send_message(chat_id, "¿Qué deseas hacer ahora?", reply_markup=menu_principal())
-    except Exception as e:
-        bot.send_message(chat_id, "❌ Error procesando firma en pantalla: " + str(e))
-
 def procesar_lote_fotos(chat_id):
     with lock:
         if chat_id not in cola_fotos or not cola_fotos[chat_id]:
@@ -969,9 +938,9 @@ def procesar_lote_fotos(chat_id):
     ahora_bog = obtener_ahora_bogota()
     hotel_activo = cfg.get("hotel", "Hotel")
     
-    # 1. SUBIR FOTO DE FIRMA DIGITAL (FALLBACK FOTO)
+    # SUBIR FOTO DE FIRMA DIGITAL (FALLBACK FOTO)
     if cfg.get("paso_custodia") == "SUBIR_FOTO_FIRMA":
-        bot.send_message(chat_id, "✍️ Guardando firma digital en Google Drive (Firmas comprobantes)...", parse_mode='Markdown')
+        bot.send_message(chat_id, "✍️ Guardando firma digital en Google Drive (Carpeta FIRMAS)...", parse_mode='Markdown')
         try:
             img_firma = imgs[0]
             buf = io.BytesIO()
@@ -991,7 +960,7 @@ def procesar_lote_fotos(chat_id):
             
             if resp.get("status") == "SUCCESS":
                 txt_f = f"✅ *¡FIRMA ARCHIVADA EN GOOGLE DRIVE!*\n\n"
-                txt_f += f"📁 *Carpeta:* `Firmas comprobantes`\n"
+                txt_f += f"📁 *Carpeta:* `FIRMAS`\n"
                 txt_f += f"📄 *Archivo:* `{resp.get('nombre_archivo')}`\n"
                 if resp.get('url_firma'):
                     txt_f += f"🔗 [Ver Firma en Drive]({resp.get('url_firma')})\n"
@@ -1004,7 +973,7 @@ def procesar_lote_fotos(chat_id):
             bot.send_message(chat_id, "❌ Error guardando firma: " + str(e))
         return
 
-    # 2. PROCESAMIENTO FINANCIERO
+    # PROCESAMIENTO FINANCIERO
     if cfg.get("modulo") == "FINANCIERO":
         bot.send_message(chat_id, "🧾 Analizando comprobante financiero con IA...", parse_mode='Markdown')
         try:
@@ -1038,7 +1007,7 @@ def procesar_lote_fotos(chat_id):
             bot.send_message(chat_id, "❌ Error analizando comprobante: " + str(e))
         return
 
-    # 3. PROCESAMIENTO OPERATIVO GENERAL
+    # PROCESAMIENTO OPERATIVO GENERAL
     bot.send_message(chat_id, f"🔍 Procesando {len(imgs)} foto(s) para *{hotel_activo}*...", parse_mode='Markdown')
     try:
         filas = analizar_con_ia(imgs, cfg)
@@ -1427,5 +1396,5 @@ def procesar_texto_general(m):
     except Exception as e:
         bot.reply_to(m, "❌ Error procesando texto: " + str(e))
 
-print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Homologación Aislada por Hotel / Hora Bogotá OK)")
+print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Hampton Servicio OK / Firmas Drive OK)")
 bot.infinity_polling()
