@@ -2,6 +2,7 @@
 # BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
 # MODELOS 100% FLASH + HOMOLOGACIÓN AISLADA POR HOTEL (FONTANA / OCEANÍA / WYNDHAM)
 # GESTIÓN FINANCIERA (LAVAARTE + CARLOS) + FIRMAS DIGITALES DRIVE + HORA BOGOTÁ
+# EDICIÓN EN DESTINO + CIERRE DEFINITIVO ANTI-DOBLE FIRMA
 # =========================================================================
 
 import telebot
@@ -232,7 +233,7 @@ def homologar_prenda_telegram(nombre_prenda, hotel_nom="", es_lenceria=False, es
         if any(w in norm for w in ["top", "crop top", "crop", "bra", "corpin"]):
             return "Brassiere/Brassiere"
 
-    # 3. REGLA FONTANA (AISLADA - CERO FACIAL, MANO = TOALLA MANO, SÁBANA/SOBRESÁBANA)
+    # 3. REGLA FONTANA (CERO FACIAL, MANO = TOALLA MANO, SÁBANA/SOBRESÁBANA)
     if "fontana" in hotel_clean:
         if "mano" in norm:
             return "Toalla mano"
@@ -246,7 +247,7 @@ def homologar_prenda_telegram(nombre_prenda, hotel_nom="", es_lenceria=False, es
         if "tapete" in norm:
             return "Toalla tapete"
 
-    # 4. REGLA OCEANÍA (AISLADA - DOBLE VS SENCILLA)
+    # 4. REGLA OCEANÍA (DOBLE VS SENCILLA)
     if "oceania" in hotel_clean:
         if "ajustable" in norm:
             if any(w in norm for w in ["doble", "semidoble", "king", "queen"]):
@@ -366,12 +367,11 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     REGLAS ESTRICTAS Y AISLADAS POR HOTEL:
     
     1. HOTEL HAMPTON (REGLA OBLIGATORIA SERVICIO):
-       - Identifica OBLIGATORIAMENTE el tipo de servicio: 'Lavado' o 'Lavado en seco' según el tipo de prenda (ej: camisa es Lavado, chaqueta o vestido es Lavado en seco).
+       - Identifica OBLIGATORIAMENTE el tipo de servicio: 'Lavado' o 'Lavado en seco'.
        - NUNCA devuelvas el campo 'servicio' vacío o nulo.
-       - Lee la remisión del huésped con total precisión.
 
     2. HOTEL FONTANA:
-       - En Fontana NO EXISTE 'FACIAL'. 'mano', 'toalla de mano' es ESTRICTAMENTE 'Toalla mano'.
+       - En Fontana NO EXISTE 'FACIAL'. 'mano' es ESTRICTAMENTE 'Toalla mano'.
        - 'ajustable' se clasifica como 'Ajustable' (sin añadir sencilla).
        - 'sobresabana', 'sabana', 'lisa' se clasifica como 'Sábana'.
 
@@ -380,8 +380,8 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
        - 'ajustable' o 'ajustable sensilla' -> 'Sábana ajustable sencilla'.
        - 'sobresabana doble' -> 'Sábana plana doble'.
        - 'sobresabana' -> 'Sábana plana sencilla'.
-       - 'cojin' o 'cojines' -> 'Cojín'.
-       - 'funda' o 'fundas' -> 'Funda'.
+       - 'cojin' -> 'Cojín'.
+       - 'funda' -> 'Funda'.
 
     4. WYNDHAM LENCERÍA:
        - Es el ÚNICO hotel autorizado para clasificar 'FACIAL'.
@@ -445,7 +445,6 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
                 es_wyndham_huespedes=es_wyndham_huespedes,
                 es_manteleria=es_manteleria
             )
-            # Garantiza servicio por defecto para evitar corridas
             if not f.get("servicio") or f.get("servicio") == "":
                 f["servicio"] = "Lavado en seco" if any(w in f["prenda"].lower() for w in ["pantalón", "pantalon", "chaqueta", "vestido", "abrigo", "traje", "blazer"]) else "Lavado"
 
@@ -592,13 +591,22 @@ def menu_post_consulta():
     )
     return markup
 
+def menu_confirmacion_despacho_en_sitio():
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("✅ Todo Conforme (Proceder a Entrega)", callback_data="despacho_ok_proceder"),
+        InlineKeyboardButton("✏️ Modificar Entrega (Falta / Quedó Paquete)", callback_data="despacho_modificar_en_sitio"),
+        InlineKeyboardButton("🏠 Cancelar y Menú", callback_data="menu_inicio")
+    )
+    return markup
+
 def menu_firma_pantalla(hotel_nom):
     url_pantalla = f"{URL_APPS_SCRIPT}?hotel={requests.utils.quote(str(hotel_nom))}"
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(
         InlineKeyboardButton("✍️ Abrir Pantalla para Firmar Aquí", web_app=WebAppInfo(url=url_pantalla)),
         InlineKeyboardButton("📸 O Adjuntar Foto de la Firma", callback_data="adjuntar_foto_firma"),
-        InlineKeyboardButton("⏩ Omitir Firma por Ahora", callback_data="omitir_firma")
+        InlineKeyboardButton("⏩ Omitir Firma y Finalizar", callback_data="omitir_firma")
     )
     return markup
 
@@ -746,6 +754,27 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
     resumen += "• O escribe cualquier corrección directa."
     return resumen
 
+def armar_texto_despacho(desp, hotel_nom):
+    items_detalle = desp.get("items_detalle", [])
+    txt_info = "📦 *DESPACHO ACTIVO DE PLANTA (VERIFICACIÓN EN SITIO):*\n"
+    txt_info += f"🏨 *Hotel:* {hotel_nom}\n"
+    txt_info += f"📅 *Fecha:* {desp.get('fecha')} ({desp.get('hora')})\n"
+    txt_info += f"👤 *Despachado en Planta por:* {desp.get('despachado_por')}\n"
+    txt_info += "──────────────────────────\n"
+    
+    if items_detalle:
+        items_ord = sorted(items_detalle, key=lambda x: str(x.get('prenda', '')).lower())
+        txt_info += "📋 *PRENDAS PROGRAMADAS PARA ENTREGA:*\n"
+        for it in items_ord:
+            txt_info += f"• *{it['prenda']}:* {it['cantidad']} unidades\n"
+    else:
+        txt_info += f"📝 *Detalle:* {desp.get('notas', 'Despacho registrado')}\n"
+        
+    txt_info += "──────────────────────────\n"
+    txt_info += f"📊 *Total Piezas:* *{desp.get('total_prendas')}*\n\n"
+    txt_info += "¿Las cantidades coinciden con lo que tienes físicamente en el hotel?"
+    return txt_info
+
 @bot.message_handler(commands=['start', 'menu'])
 def cmd_start(m):
     sesiones[m.chat.id] = {}
@@ -869,32 +898,36 @@ def iniciar_confirmacion_hotel(call):
         
         if resp.get("status") == "SUCCESS":
             desp = resp.get("despacho", {})
-            items_detalle = desp.get("items_detalle", [])
             sesiones[chat_id]["despacho_pendiente"] = desp
-            sesiones[chat_id]["paso_custodia"] = "CONFIRMAR_QUIEN_RECIBE_HOTEL"
-            
-            txt_info = "📦 *DESPACHO ACTIVO DE PLANTA (ORGANIZADO):*\n"
-            txt_info += f"🏨 *Hotel:* {hotel_nom}\n"
-            txt_info += f"📅 *Fecha:* {desp.get('fecha')} ({desp.get('hora')})\n"
-            txt_info += f"👤 *Despachador en Planta:* {desp.get('despachado_por')}\n"
-            txt_info += "──────────────────────────\n"
-            
-            if items_detalle:
-                items_ord = sorted(items_detalle, key=lambda x: str(x.get('prenda', '')).lower())
-                txt_info += "📋 *PRENDAS A ENTREGAR:*\n"
-                for it in items_ord:
-                    txt_info += f"• *{it['prenda']}:* {it['cantidad']} unidades\n"
-            else:
-                txt_info += f"📝 *Detalle:* {desp.get('notas', 'Despacho registrado')}\n"
-                
-            txt_info += "──────────────────────────\n"
-            txt_info += f"📊 *Total Piezas:* *{desp.get('total_prendas')}*\n\n"
-            txt_info += "✍️ *Por favor escribe el nombre de la persona que recibe en el hotel (Nombre y cargo):*"
-            bot.send_message(chat_id, txt_info, parse_mode='Markdown')
+            txt_info = armar_texto_despacho(desp, hotel_nom)
+            bot.send_message(chat_id, txt_info, reply_markup=menu_confirmacion_despacho_en_sitio(), parse_mode='Markdown')
         else:
             bot.send_message(chat_id, f"⚠️ No hay un despacho activo registrado en planta para hoy en *{hotel_nom}*.", parse_mode='Markdown')
     except Exception as e:
         bot.send_message(chat_id, "❌ Error consultando: " + str(e))
+
+@bot.callback_query_handler(func=lambda call: call.data in ['despacho_ok_proceder', 'despacho_modificar_en_sitio'])
+def manejar_decision_entrega_sitio(call):
+    chat_id = call.message.chat.id
+    cfg = sesiones.get(chat_id, {})
+    hotel_nom = cfg.get("hotel", "Hotel")
+    
+    if call.data == 'despacho_ok_proceder':
+        sesiones[chat_id]["paso_custodia"] = "CONFIRMAR_QUIEN_RECIBE_HOTEL"
+        bot.edit_message_text(
+            f"✅ *Cantidades verificadas para {hotel_nom}*.\n\n✍️ *Por favor escribe el nombre y cargo de la persona que recibe en el hotel:*",
+            chat_id,
+            call.message.message_id,
+            parse_mode='Markdown'
+        )
+    elif call.data == 'despacho_modificar_en_sitio':
+        sesiones[chat_id]["paso_custodia"] = "AJUSTAR_PRENDAS_DESPACHO_SITIO"
+        bot.edit_message_text(
+            f"✏️ *Ajuste de Entrega en {hotel_nom}*\n\nEscribe qué prendas o cantidades reales estás entregando (por ejemplo: _'Solo entregué 12 toallas cuerpo y 8 manos'_ o _'Se quedaron 2 sábanas'_):",
+            chat_id,
+            call.message.message_id,
+            parse_mode='Markdown'
+        )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mov_recibir_'))
 def iniciar_recepcion(call):
@@ -919,11 +952,60 @@ def manejar_post_guardado(call):
 @bot.callback_query_handler(func=lambda call: call.data in ['adjuntar_foto_firma', 'omitir_firma'])
 def manejar_opcion_firma_callback(call):
     chat_id = call.message.chat.id
+    # Eliminar botones del mensaje anterior para evitar repetición
+    try:
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+
     if call.data == 'adjuntar_foto_firma':
         sesiones[chat_id]["paso_custodia"] = "SUBIR_FOTO_FIRMA"
-        bot.send_message(chat_id, "📸 *Toma una foto clara de la firma de la camarera / recepcionista y envíala:*", parse_mode='Markdown')
+        bot.send_message(chat_id, "📸 *Toma una foto clara de la firma manuscrita y envíala:*", parse_mode='Markdown')
     else:
-        bot.send_message(chat_id, "✅ Entrega finalizada sin firma fotográfica.", reply_markup=menu_principal())
+        sesiones[chat_id] = {}
+        bot.send_message(chat_id, "✅ *Entrega finalizada con éxito sin firma.*", parse_mode='Markdown')
+        bot.send_message(chat_id, "Selecciona una nueva opción:", reply_markup=menu_principal())
+
+@bot.message_handler(content_types=['web_app_data'])
+def recibir_firma_web_app(message):
+    chat_id = message.chat.id
+    ses = sesiones.get(chat_id, {})
+    ahora_bog = obtener_ahora_bogota()
+    hotel_activo = ses.get("hotel", "Hotel")
+
+    try:
+        data_web = json.loads(message.web_app_data.data)
+        if data_web.get("tipo") == "FIRMA_DIGITAL":
+            bot.send_message(chat_id, "✍️ Guardando firma digital en Google Drive (Carpeta FIRMAS)...", parse_mode='Markdown')
+            
+            payload = {
+                "accion": "GUARDAR_FIRMA_ENTREGA",
+                "hotel": hotel_activo,
+                "ruta": ses.get("ruta", "Oriente"),
+                "fecha": ahora_bog.strftime("%Y-%m-%d"),
+                "hora": ahora_bog.strftime("%I-%M-%p"),
+                "firma_base64": data_web.get("firma_b64"),
+                "recibido_por": ses.get("recibido_por_hotel", "Personal Hotel")
+            }
+            resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=45)
+            
+            if resp.get("status") == "SUCCESS":
+                txt_f = f"✅ *¡ENTREGA FINALIZADA Y FIRMA ARCHIVADA!*\n\n"
+                txt_f += f"🏨 *Hotel:* {hotel_activo}\n"
+                txt_f += f"📁 *Carpeta Drive:* `FIRMAS`\n"
+                txt_f += f"📄 *Archivo:* `{resp.get('nombre_archivo')}`\n"
+                if resp.get('url_firma'):
+                    txt_f += f"🔗 [Ver Firma en Google Drive]({resp.get('url_firma')})\n\n"
+                txt_f += "🔒 *Proceso cerrado definitivamente.*"
+                bot.send_message(chat_id, txt_f, parse_mode='Markdown')
+            else:
+                bot.send_message(chat_id, "⚠️ No se pudo archivar la firma: " + str(resp.get("mensaje")))
+                
+            # Limpiar sesión y terminar proceso por completo
+            sesiones[chat_id] = {}
+            bot.send_message(chat_id, "¿Qué deseas hacer ahora?", reply_markup=menu_principal())
+    except Exception as e:
+        bot.send_message(chat_id, "❌ Error procesando firma en pantalla: " + str(e))
 
 def procesar_lote_fotos(chat_id):
     with lock:
@@ -938,7 +1020,7 @@ def procesar_lote_fotos(chat_id):
     ahora_bog = obtener_ahora_bogota()
     hotel_activo = cfg.get("hotel", "Hotel")
     
-    # SUBIR FOTO DE FIRMA DIGITAL (FALLBACK FOTO)
+    # 1. SUBIR FOTO DE FIRMA DIGITAL (FALLBACK FOTO) Y CERRAR PROCESO
     if cfg.get("paso_custodia") == "SUBIR_FOTO_FIRMA":
         bot.send_message(chat_id, "✍️ Guardando firma digital en Google Drive (Carpeta FIRMAS)...", parse_mode='Markdown')
         try:
@@ -959,21 +1041,25 @@ def procesar_lote_fotos(chat_id):
             resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=45)
             
             if resp.get("status") == "SUCCESS":
-                txt_f = f"✅ *¡FIRMA ARCHIVADA EN GOOGLE DRIVE!*\n\n"
+                txt_f = f"✅ *¡ENTREGA FINALIZADA Y FIRMA ARCHIVADA!*\n\n"
+                txt_f += f"🏨 *Hotel:* {hotel_activo}\n"
                 txt_f += f"📁 *Carpeta:* `FIRMAS`\n"
                 txt_f += f"📄 *Archivo:* `{resp.get('nombre_archivo')}`\n"
                 if resp.get('url_firma'):
-                    txt_f += f"🔗 [Ver Firma en Drive]({resp.get('url_firma')})\n"
+                    txt_f += f"🔗 [Ver Firma en Drive]({resp.get('url_firma')})\n\n"
+                txt_f += "🔒 *Proceso cerrado definitivamente.*"
                 bot.send_message(chat_id, txt_f, parse_mode='Markdown')
             else:
                 bot.send_message(chat_id, "⚠️ Error guardando firma: " + str(resp.get("mensaje")))
+                
+            # Cierre definitivo de sesión
             sesiones[chat_id] = {}
             bot.send_message(chat_id, "¿Qué deseas hacer ahora?", reply_markup=menu_principal())
         except Exception as e:
             bot.send_message(chat_id, "❌ Error guardando firma: " + str(e))
         return
 
-    # PROCESAMIENTO FINANCIERO
+    # 2. PROCESAMIENTO FINANCIERO
     if cfg.get("modulo") == "FINANCIERO":
         bot.send_message(chat_id, "🧾 Analizando comprobante financiero con IA...", parse_mode='Markdown')
         try:
@@ -1007,7 +1093,7 @@ def procesar_lote_fotos(chat_id):
             bot.send_message(chat_id, "❌ Error analizando comprobante: " + str(e))
         return
 
-    # PROCESAMIENTO OPERATIVO GENERAL
+    # 3. PROCESAMIENTO OPERATIVO GENERAL
     bot.send_message(chat_id, f"🔍 Procesando {len(imgs)} foto(s) para *{hotel_activo}*...", parse_mode='Markdown')
     try:
         filas = analizar_con_ia(imgs, cfg)
@@ -1198,7 +1284,42 @@ def procesar_texto_general(m):
     paso = ses.get("paso_custodia")
     modo = ses.get("modo")
     ahora_bog = obtener_ahora_bogota()
+    hotel_nom = ses.get("hotel", "Hotel")
     
+    # AJUSTE DE PRENDAS DE DESPACHO EN SITIO (SI ALGO QUEDÓ O FALTÓ)
+    if paso == "AJUSTAR_PRENDAS_DESPACHO_SITIO":
+        bot.reply_to(m, "⚙️ Ajustando prendas para la entrega en el hotel...", parse_mode='Markdown')
+        desp = ses.get("despacho_pendiente", {})
+        try:
+            items_previos = json.dumps(desp.get("items_detalle", []), ensure_ascii=False)
+            prompt_ajuste = f"""
+            Eres el auditor contable de Lavaarte. El conductor está en el hotel '{hotel_nom}' entregando un despacho.
+            Lista original de prendas despachadas: {items_previos}.
+            Modificación reportada por el conductor en sitio: '{m.text}'.
+            Ajusta las cantidades de las prendas entregadas efectivamente.
+            Devuelve EXCLUSIVAMENTE un JSON:
+            {{
+              "items_detalle": [
+                {{"prenda": "Nombre prenda", "cantidad": 10}}
+              ],
+              "total_prendas": 10,
+              "notas": "Nota del ajuste (ej: Faltaron 2 sabanas)"
+            }}
+            """
+            texto_raw = llamar_gemini_rotativo([prompt_ajuste])
+            ajustado = json.loads(texto_raw.strip().replace("```json", "").replace("```", "").strip())
+            
+            desp["items_detalle"] = ajustado.get("items_detalle", desp.get("items_detalle", []))
+            desp["total_prendas"] = ajustado.get("total_prendas", sum(i['cantidad'] for i in desp["items_detalle"]))
+            desp["notas"] = ajustado.get("notas", desp.get("notas", ""))
+            ses["despacho_pendiente"] = desp
+            
+            txt_nuevo = "✏️ *DESPACHO ACTUALIZADO EN SITIO:*\n\n" + armar_texto_despacho(desp, hotel_nom)
+            bot.send_message(chat_id, txt_nuevo, reply_markup=menu_confirmacion_despacho_en_sitio(), parse_mode='Markdown')
+        except Exception as e:
+            bot.reply_to(m, "❌ Error ajustando prendas: " + str(e))
+        return
+
     # 1. MODO CONSULTA / AUDITORÍA IA
     if modo == "CONSULTA":
         bot.reply_to(m, "🔍 Consultando libros y bases de datos con IA...", parse_mode='Markdown')
@@ -1325,16 +1446,22 @@ def procesar_texto_general(m):
         
         bot.reply_to(m, "⏳ Confirmando entrega y sellando hora en Google Sheets...")
         try:
+            detalle_notas = desp.get("notas", "")
+            if not detalle_notas:
+                detalle_notas = f"Entregado a {quien_recibe}. Total prendas: {desp.get('total_prendas')}."
+            else:
+                detalle_notas = f"Entregado a {quien_recibe}. {detalle_notas}"
+
             payload = {
                 "accion": "CONFIRMAR_ENTREGA_HOTEL",
                 "ruta": ses.get("ruta", "Oriente"),
-                "hotel": ses.get("hotel", "Hotel"),
+                "hotel": hotel_nom,
                 "fila_despacho": desp.get("fila"),
                 "total_prendas": desp.get("total_prendas", 0),
                 "responsable_lavaarte": desp.get("despachado_por", "Conductor"),
                 "responsable_hotel": quien_recibe,
                 "hora_sellada": hora_bogota,
-                "detalle_resumen": f"Entregado a {quien_recibe}. Total prendas: {desp.get('total_prendas')}."
+                "detalle_resumen": detalle_notas
             }
             resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=40)
             if resp.get("status") == "SUCCESS":
@@ -1342,7 +1469,7 @@ def procesar_texto_general(m):
                 ses["paso_custodia"] = None
                 
                 txt_ok = f"🤝 *¡ENTREGA CONFIRMADA EXITOSAMENTE!*\n\n"
-                txt_ok += f"🏨 *Hotel:* {ses.get('hotel')}\n"
+                txt_ok += f"🏨 *Hotel:* {hotel_nom}\n"
                 txt_ok += f"👤 *Entregado por:* {desp.get('despachado_por')}\n"
                 txt_ok += f"✍️ *Recibido por:* {quien_recibe}\n"
                 txt_ok += f"📊 *Prendas entregadas:* {desp.get('total_prendas')}\n"
@@ -1350,7 +1477,7 @@ def procesar_texto_general(m):
                 txt_ok += "📝 *RESPALDO DE SEGURIDAD (FIRMA DIGITAL):*\n"
                 txt_ok += "Pídele a la persona que firme en la pantalla tocando el botón azul de abajo:"
                 
-                bot.send_message(chat_id, txt_ok, reply_markup=menu_firma_pantalla(ses.get("hotel", "Hotel")), parse_mode='Markdown')
+                bot.send_message(chat_id, txt_ok, reply_markup=menu_firma_pantalla(hotel_nom), parse_mode='Markdown')
             else:
                 bot.reply_to(m, "⚠️ Error: " + str(resp.get("mensaje")))
         except Exception as e:
@@ -1396,5 +1523,5 @@ def procesar_texto_general(m):
     except Exception as e:
         bot.reply_to(m, "❌ Error procesando texto: " + str(e))
 
-print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Hampton Servicio OK / Firmas Drive OK)")
+print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Edición en Destino OK / Anti-Doble Firma OK)")
 bot.infinity_polling()
