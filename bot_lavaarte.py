@@ -2,7 +2,7 @@
 # BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
 # MODELOS 100% FLASH + HOMOLOGACIÓN AISLADA POR HOTEL (FONTANA / OCEANÍA / WYNDHAM)
 # GESTIÓN FINANCIERA (LAVAARTE + CARLOS) + FIRMAS DIGITALES DRIVE + HORA BOGOTÁ
-# EDICIÓN EN DESTINO + CIERRE DEFINITIVO ANTI-DOBLE FIRMA
+# EDICIÓN EN DESTINO + CIERRE DEFINITIVO ANTI-DOBLE FIRMA + DÍA CORRIDO AUTOMÁTICO
 # =========================================================================
 
 import telebot
@@ -52,6 +52,19 @@ def obtener_ahora_bogota():
         utc_now = datetime.datetime.now(datetime.timezone.utc)
         return utc_now - datetime.timedelta(hours=5)
 
+def calcular_dia_corrido_logistica():
+    """
+    Calcula el día hábil anterior para despacho de lencería:
+    - Si es lunes (weekday 0), retrocede al sábado (2 días antes).
+    - Para cualquier otro día, retrocede 1 día.
+    """
+    ahora = obtener_ahora_bogota()
+    if ahora.weekday() == 0:  # Lunes
+        dia_logistico = ahora - datetime.timedelta(days=2)
+    else:
+        dia_logistico = ahora - datetime.timedelta(days=1)
+    return dia_logistico.day
+
 def ejecutar_post_apps_script(url, payload, timeout=60):
     for intento in range(3):
         try:
@@ -77,8 +90,8 @@ def ejecutar_post_apps_script(url, payload, timeout=60):
 ARBOL_SERVICIOS = {
     # RUTA ORIENTE
     "wyndham_huespedes": {"ruta": "Oriente", "hotel": "Wyndham", "servicio": "Huéspedes", "hoja": "WYNDHAM_HUESPEDES_DATOS", "tipo": "HUESPEDES", "base_defecto": "WYNDHAM HUÉSPEDES"},
-    "wyndham_lenceria": {"ruta": "Oriente", "hotel": "Wyndham", "servicio": "Lencería", "hoja": "WYNDHAM_LENCERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "WYNDHAM LENCERÍA"},
-    "wyndham_manteleria": {"ruta": "Oriente", "hotel": "Wyndham", "servicio": "Mantelería", "hoja": "WYNDHAM_MANTELERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "WYNDHAM MANTELERÍA"},
+    "wyndham_lenceria": {"ruta": "Oriente", "hotel": "Wyndham Lencería", "servicio": "Lencería", "hoja": "WYNDHAM_LENCERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "WYNDHAM LENCERÍA"},
+    "wyndham_manteleria": {"ruta": "Oriente", "hotel": "Wyndham Mantelería", "servicio": "Mantelería", "hoja": "WYNDHAM_MANTELERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "WYNDHAM MANTELERÍA"},
     "hilton": {"ruta": "Oriente", "hotel": "Hilton", "servicio": "General", "hoja": "HILTON_DATOS", "tipo": "HUESPEDES", "base_defecto": "HILTON HUÉSPEDES"},
     "hampton": {"ruta": "Oriente", "hotel": "Hampton", "servicio": "General", "hoja": "HAMPTON_DATOS", "tipo": "HUESPEDES", "base_defecto": "HAMPTON HUÉSPEDES"},
     "oceania": {"ruta": "Oriente", "hotel": "Oceania", "servicio": "Lencería", "hoja": "OCEANIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "OCEANIA LENCERÍA"},
@@ -137,7 +150,7 @@ CATALOGO_GLOBAL = """
 35|Vestido baño|Lavado|11000
 36|Zapatos tenis/ Tenis Shoes|Lavado|16400
 
-[PRECIOS NORTE 2026 - HUÉSPEDES DANN / VIRREY / ANDES / BOGOTÁ PLAZA / HAMPTON]
+[PRECIOS NORTE 2026 - HUÉSPEDES DANN / VIRREY / ANDES / BOGOTÁ PLAZA / HAMPTON / HILTON]
 1|Abrigo/ Coat|Lavado en seco|19950
 2|Bata/Dress|Lavado en seco|19950
 3|Bermuda de vestir|Lavado|9918
@@ -217,7 +230,11 @@ def homologar_prenda_telegram(nombre_prenda, hotel_nom="", es_lenceria=False, es
     norm = limpiar_texto_simple(nombre_prenda)
     hotel_clean = limpiar_texto_simple(hotel_nom)
     
-    # 1. REGLA MANTELERÍA (WYNDHAM / SUITE)
+    # 1. REGLA UNIVERSAL BÓXER = CALZONCILLO
+    if "boxer" in norm:
+        return "Calzoncillo/Undershort"
+
+    # 2. REGLA MANTELERÍA (WYNDHAM / SUITE)
     if es_manteleria or "manteleria" in hotel_clean:
         if "blanco" in norm or norm == "mantel blanco":
             return "Mantel blanco"
@@ -226,14 +243,14 @@ def homologar_prenda_telegram(nombre_prenda, hotel_nom="", es_lenceria=False, es
         if "servilleta" in norm or "servilletas" in norm:
             return "Servilleta"
 
-    # 2. WYNDHAM HUÉSPEDES
+    # 3. WYNDHAM HUÉSPEDES
     if es_wyndham_huespedes or "wyndham" in hotel_clean:
         if any(w in norm for w in ["leggin", "leggis", "licra", "pantalon de licra", "malla"]):
             return "Pantalón/Pants"
         if any(w in norm for w in ["top", "crop top", "crop", "bra", "corpin"]):
             return "Brassiere/Brassiere"
 
-    # 3. REGLA FONTANA (CERO FACIAL, MANO = TOALLA MANO, SÁBANA/SOBRESÁBANA)
+    # 4. REGLA FONTANA (CERO FACIAL, MANO = TOALLA MANO, SÁBANA/SOBRESÁBANA)
     if "fontana" in hotel_clean:
         if "mano" in norm:
             return "Toalla mano"
@@ -247,7 +264,7 @@ def homologar_prenda_telegram(nombre_prenda, hotel_nom="", es_lenceria=False, es
         if "tapete" in norm:
             return "Toalla tapete"
 
-    # 4. REGLA OCEANÍA (DOBLE VS SENCILLA)
+    # 5. REGLA OCEANÍA (DOBLE VS SENCILLA)
     if "oceania" in hotel_clean:
         if "ajustable" in norm:
             if any(w in norm for w in ["doble", "semidoble", "king", "queen"]):
@@ -263,13 +280,13 @@ def homologar_prenda_telegram(nombre_prenda, hotel_nom="", es_lenceria=False, es
         if norm in ["funda", "fundas"]:
             return "Funda"
 
-    # 5. REGLA EXCLUSIVA FACIAL (SOLO WYNDHAM LENCERÍA)
+    # 6. REGLA EXCLUSIVA FACIAL (SOLO WYNDHAM LENCERÍA)
     if "facial" in norm:
-        if "wyndham" in hotel_clean:
+        if "wyndham" in hotel_clean and "lenceria" in hotel_clean:
             return "FACIAL"
         return "Toalla mano"
 
-    # 6. PROTECTOR Y CORTESÍA GENERAL
+    # 7. PROTECTOR Y CORTESÍA GENERAL
     if "protector" in norm and "colchon" in norm:
         return "PROTECTOR DE COLCHON"
     if "cortesia" in norm:
@@ -357,6 +374,7 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     key = config_sesion.get('key', '')
     
     es_wyndham_huespedes = (key == "wyndham_huespedes")
+    es_hilton_huespedes = (key == "hilton")
     es_manteleria = ("manteleria" in key or "manteleria" in servicio.lower())
     es_lenceria = es_servicio_lista_limpia(config_sesion)
 
@@ -366,16 +384,23 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     
     REGLAS ESTRICTAS Y AISLADAS POR HOTEL:
     
-    1. HOTEL HAMPTON (REGLA OBLIGATORIA SERVICIO):
-       - Identifica OBLIGATORIAMENTE el tipo de servicio: 'Lavado' o 'Lavado en seco'.
-       - NUNCA devuelvas el campo 'servicio' vacío o nulo.
+    1. REGLA BÓXER UNIVERSAL HUÉSPEDES:
+       - 'boxer', 'bóxer', 'boxers' es SIEMPRE 'Calzoncillo/Undershort' (Código 11, $1.700 en Wyndham / $3.306 en Norte).
+       - NUNCA clasificar un bóxer como pantaloneta.
 
-    2. HOTEL FONTANA:
+    2. REGLA CERO REMISIÓN EN HILTON Y WYNDHAM:
+       - En Hotel '{hotel}': {'NO EXISTE campo Remisión. Deja remision vacía ("")' if es_hilton_huespedes or es_wyndham_huespedes else 'Registra la remisión si existe'}.
+
+    3. HOTEL HAMPTON:
+       - Identifica OBLIGATORIAMENTE el tipo de servicio: 'Lavado' o 'Lavado en seco'.
+       - Lee la remisión correctamente.
+
+    4. HOTEL FONTANA:
        - En Fontana NO EXISTE 'FACIAL'. 'mano' es ESTRICTAMENTE 'Toalla mano'.
        - 'ajustable' se clasifica como 'Ajustable' (sin añadir sencilla).
        - 'sobresabana', 'sabana', 'lisa' se clasifica como 'Sábana'.
 
-    3. HOTEL OCEANÍA:
+    5. HOTEL OCEANÍA:
        - 'ajustable doble' -> 'Sábana ajustable doble'.
        - 'ajustable' o 'ajustable sensilla' -> 'Sábana ajustable sencilla'.
        - 'sobresabana doble' -> 'Sábana plana doble'.
@@ -383,19 +408,9 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
        - 'cojin' -> 'Cojín'.
        - 'funda' -> 'Funda'.
 
-    4. WYNDHAM LENCERÍA:
-       - Es el ÚNICO hotel autorizado para clasificar 'FACIAL'.
-
-    5. WYNDHAM HUÉSPEDES (wyndham_huespedes):
-       - EXCLUSIÓN DE EMPLEADOS: Si la lista describe empleados por nombre sin habitación, descártalos.
-       - ACEPTA HABITACIONES NUMÉRICAS Y HABITACIONES 'N.N' o 'NN'.
-       - REGLA LEGGINS: 'Pantalón/Pants' (Código 25, Lavado en seco, $5.950).
-       - REGLA TOP: 'Brassiere/Brassiere' (Código 4, Lavado, $3.500).
-
-    6. MANTELERÍA (WYNDHAM / SUITE):
-       - 'blanco' -> 'Mantel blanco'.
-       - 'azul' -> 'Mantel azul'.
-       - 'servilleta' -> 'Servilleta'.
+    6. WYNDHAM LENCERÍA vs MANTELERÍA:
+       - Lencería: Es el ÚNICO hotel con 'FACIAL'.
+       - Mantelería: 'blanco' -> 'Mantel blanco', 'azul' -> 'Mantel azul', 'servilleta' -> 'Servilleta'.
 
     CATÁLOGO GLOBAL:
     {CATALOGO_GLOBAL}
@@ -406,7 +421,7 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     [
       {{
         "fecha": "{fecha_hoy}",
-        "remision": "1234",
+        "remision": "{'' if (es_hilton_huespedes or es_wyndham_huespedes) else '1234'}",
         "habitacion": "402",
         "codigo": 25,
         "prenda": "Pantalón/Pants",
@@ -448,6 +463,9 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
             if not f.get("servicio") or f.get("servicio") == "":
                 f["servicio"] = "Lavado en seco" if any(w in f["prenda"].lower() for w in ["pantalón", "pantalon", "chaqueta", "vestido", "abrigo", "traje", "blazer"]) else "Lavado"
 
+            if es_hilton_huespedes or es_wyndham_huespedes:
+                f["remision"] = ""
+
             if es_wyndham_huespedes:
                 if f["prenda"] == "Pantalón/Pants":
                     f["codigo"] = 25
@@ -459,6 +477,11 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
                     f["servicio"] = "Lavado"
                     f["valorUnitario"] = 3500
                     f["valorTotal"] = a_entero(f.get("cantidad", 1)) * 3500
+                elif f["prenda"] == "Calzoncillo/Undershort":
+                    f["codigo"] = 11
+                    f["servicio"] = "Lavado"
+                    f["valorUnitario"] = 1700
+                    f["valorTotal"] = a_entero(f.get("cantidad", 1)) * 1700
 
     if es_wyndham_huespedes and isinstance(filas, list):
         filas_consolidadas = {}
@@ -876,23 +899,33 @@ def iniciar_despacho_planta(call):
     chat_id = call.message.chat.id
     sesiones[chat_id]["sub_op"] = "DESPACHO_PLANTA"
     sesiones[chat_id]["paso_custodia"] = "RESP_LAVAARTE_DESPACHO"
-    bot.send_message(chat_id, "📦 *DESPACHO EN PLANTA*\n\nEscribe el nombre de quién despacha la ropa en planta:", parse_mode='Markdown')
+    
+    # Día corrido automático para despacho en planta
+    dia_corrido = calcular_dia_corrido_logistica()
+    sesiones[chat_id]["dia_despacho_corrido"] = dia_corrido
+    
+    txt = f"📦 *DESPACHO EN PLANTA*\n\n"
+    txt += f"📅 Se asignará por defecto a la lencería recibida el día *{dia_corrido}* (día hábil anterior).\n"
+    txt += "Escribe el nombre de quién despacha la ropa en planta:"
+    bot.send_message(chat_id, txt, parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('confirmar_hotel_'))
 def iniciar_confirmacion_hotel(call):
     chat_id = call.message.chat.id
     cfg = sesiones.get(chat_id, {})
     hotel_nom = cfg.get("hotel", "Hotel")
-    dia_actual = obtener_ahora_bogota().day
     
-    bot.send_message(chat_id, f"🔎 Buscando despacho activo del día {dia_actual} para *{hotel_nom}*...", parse_mode='Markdown')
+    # DÍA CORRIDO AUTOMÁTICO PARA ENTREGA EN HOTEL
+    dia_logistico = calcular_dia_corrido_logistica()
+    
+    bot.send_message(chat_id, f"🔎 Buscando despacho activo correspondiente al día *{dia_logistico}* para *{hotel_nom}*...", parse_mode='Markdown')
     try:
         payload = {
             "accion": "CONSULTAR_DESPACHO",
             "ruta": cfg.get("ruta", "Oriente"),
             "hotel": hotel_nom,
             "destino": cfg.get("hoja", ""),
-            "dia": dia_actual
+            "dia": dia_logistico
         }
         resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=35)
         
@@ -902,7 +935,7 @@ def iniciar_confirmacion_hotel(call):
             txt_info = armar_texto_despacho(desp, hotel_nom)
             bot.send_message(chat_id, txt_info, reply_markup=menu_confirmacion_despacho_en_sitio(), parse_mode='Markdown')
         else:
-            bot.send_message(chat_id, f"⚠️ No hay un despacho activo registrado en planta para hoy en *{hotel_nom}*.", parse_mode='Markdown')
+            bot.send_message(chat_id, f"⚠️ No se encontró un despacho activo registrado de planta para el día {dia_logistico} en *{hotel_nom}*.\nVerifica si en planta ya fue cargado el despacho.", parse_mode='Markdown')
     except Exception as e:
         bot.send_message(chat_id, "❌ Error consultando: " + str(e))
 
@@ -952,7 +985,6 @@ def manejar_post_guardado(call):
 @bot.callback_query_handler(func=lambda call: call.data in ['adjuntar_foto_firma', 'omitir_firma'])
 def manejar_opcion_firma_callback(call):
     chat_id = call.message.chat.id
-    # Eliminar botones del mensaje anterior para evitar repetición
     try:
         bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
     except Exception:
@@ -1001,7 +1033,6 @@ def recibir_firma_web_app(message):
             else:
                 bot.send_message(chat_id, "⚠️ No se pudo archivar la firma: " + str(resp.get("mensaje")))
                 
-            # Limpiar sesión y terminar proceso por completo
             sesiones[chat_id] = {}
             bot.send_message(chat_id, "¿Qué deseas hacer ahora?", reply_markup=menu_principal())
     except Exception as e:
@@ -1052,7 +1083,6 @@ def procesar_lote_fotos(chat_id):
             else:
                 bot.send_message(chat_id, "⚠️ Error guardando firma: " + str(resp.get("mensaje")))
                 
-            # Cierre definitivo de sesión
             sesiones[chat_id] = {}
             bot.send_message(chat_id, "¿Qué deseas hacer ahora?", reply_markup=menu_principal())
         except Exception as e:
@@ -1225,22 +1255,26 @@ def confirmar_guardado(m):
             bot.reply_to(m, "❌ Error registrando financiero: " + str(e))
         return
 
-    # 2. CONFIRMAR PRENDAS OPERATIVAS (HORA EXACTA BOGOTÁ)
+    # 2. CONFIRMAR PRENDAS OPERATIVAS (CON DÍA CORRIDO SI ES DESPACHO EN PLANTA)
     if ses.get("filas"):
         cfg = ses
         filas = cfg["filas"]
         tipo_op = filas[0].get("tipo_operacion_detectada", cfg.get("tipo", "HUESPEDES"))
         hora_bogota = ahora_bog.strftime("%I:%M %p")
         
-        bot.reply_to(m, f"⏳ Guardando datos y registrando custodia (Hora Bogotá: {hora_bogota})...", parse_mode='Markdown')
-        try:
+        # Selección de día: Si es despacho de lencería, usa el día corrido (día anterior hábil)
+        if cfg.get("movimiento") == "ENTREGA" and cfg.get("dia_despacho_corrido"):
+            dia_actual = cfg.get("dia_despacho_corrido")
+        else:
             dia_actual = ahora_bog.day
             if filas and filas[0].get('fecha'):
                 try:
                     dia_actual = int(filas[0]['fecha'].split('/')[0])
                 except Exception:
                     pass
-                    
+
+        bot.reply_to(m, f"⏳ Guardando en día *{dia_actual}* (Hora Bogotá: {hora_bogota})...", parse_mode='Markdown')
+        try:
             payload = {
                 "accion": "GUARDAR",
                 "ruta": cfg.get("ruta", "Oriente"),
@@ -1259,7 +1293,7 @@ def confirmar_guardado(m):
             
             if data_resp.get("status") == "SUCCESS":
                 hoja_dest = data_resp.get("hoja_guardada", cfg['hotel'])
-                bot.reply_to(m, f"✅ *¡Datos guardados con éxito!*\n📋 Registrado en: `{hoja_dest}`\n⏱️ Hora sellada oficial: *{hora_bogota}*\n⏱️ Auditoría generada en `TIEMPOS` y `RECEPCION_ENTREGA`.", parse_mode='Markdown')
+                bot.reply_to(m, f"✅ *¡Datos guardados con éxito!*\n📋 Registrado en: `{hoja_dest}`\n📅 Columna del día: *{dia_actual}*\n⏱️ Hora sellada: *{hora_bogota}*", parse_mode='Markdown')
                 sesiones[chat_id]["filas"] = []
                 bot.send_message(chat_id, "¿Qué deseas hacer a continuación?", reply_markup=menu_post_guardado())
             else:
@@ -1523,5 +1557,5 @@ def procesar_texto_general(m):
     except Exception as e:
         bot.reply_to(m, "❌ Error procesando texto: " + str(e))
 
-print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Edición en Destino OK / Anti-Doble Firma OK)")
+print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Día Corrido OK / Cero Remisión Hilton-Wyndham / Boxer=Calzoncillo OK)")
 bot.infinity_polling()
