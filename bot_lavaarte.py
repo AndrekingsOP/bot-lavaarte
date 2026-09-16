@@ -4,6 +4,7 @@
 # GESTIÓN FINANCIERA (LAVAARTE + CARLOS) + FIRMAS DIGITALES DRIVE + HORA BOGOTÁ
 # EDICIÓN EN DESTINO + CIERRE DEFINITIVO ANTI-DOBLE FIRMA + DÍA CORRIDO AUTOMÁTICO
 # SERVIDOR WEB FLASK EMBEBIDO ANTI-SUSPENSIÓN (RENDER 24/7)
+# CONTROL ESTRICTO ANTI-DUPLICADOS (CERO DUPLICACIÓN EN MATRICES)
 # =========================================================================
 
 import telebot
@@ -17,6 +18,7 @@ import threading
 import base64
 import unicodedata
 import os
+import uuid
 from flask import Flask
 from PIL import Image
 from google import genai
@@ -81,26 +83,24 @@ def calcular_dia_corrido_logistica():
         dia_logistico = ahora - datetime.timedelta(days=1)
     return dia_logistico.day
 
-def ejecutar_post_apps_script(url, payload, timeout=60):
-    for intento in range(3):
-        try:
-            resp = requests.post(
-                url, 
-                data=json.dumps(payload), 
-                headers={'Content-Type': 'application/json'}, 
-                timeout=timeout,
-                allow_redirects=True
-            )
-            txt = resp.text.strip()
-            if txt.startswith('{') or txt.startswith('['):
-                return json.loads(txt)
-            else:
-                if resp.status_code == 200:
-                    return {"status": "SUCCESS", "mensaje": txt[:150]}
-        except Exception as e:
-            if intento == 2:
-                raise e
-            time.sleep(1.2)
+def ejecutar_post_apps_script(url, payload, timeout=75):
+    """Ejecución protegida contra duplicados con timeout holgado."""
+    try:
+        resp = requests.post(
+            url, 
+            data=json.dumps(payload), 
+            headers={'Content-Type': 'application/json'}, 
+            timeout=timeout,
+            allow_redirects=True
+        )
+        txt = resp.text.strip()
+        if txt.startswith('{') or txt.startswith('['):
+            return json.loads(txt)
+        else:
+            if resp.status_code == 200:
+                return {"status": "SUCCESS", "mensaje": txt[:150]}
+    except Exception as e:
+        raise ValueError(f"Error de comunicación con Google Sheets: {str(e)}")
     raise ValueError("El servidor de Google Sheets no devolvió una respuesta válida.")
 
 ARBOL_SERVICIOS = {
@@ -1067,7 +1067,7 @@ def procesar_lote_fotos(chat_id):
     ahora_bog = obtener_ahora_bogota()
     hotel_activo = cfg.get("hotel", "Hotel")
     
-    # 1. SUBIR FOTO DE FIRMA DIGITAL (FALLBACK FOTO) Y CERRAR PROCESO
+    # 1. SUBIR FOTO DE FIRMA DIGITAL
     if cfg.get("paso_custodia") == "SUBIR_FOTO_FIRMA":
         bot.send_message(chat_id, "✍️ Guardando firma digital en Google Drive (Carpeta FIRMAS)...", parse_mode='Markdown')
         try:
@@ -1255,7 +1255,8 @@ def confirmar_guardado(m):
                 m_fin["valor"] = val_num
                 payload = {
                     "accion": "REGISTRAR_FINANCIERO",
-                    "movimiento_financiero": m_fin
+                    "movimiento_financiero": m_fin,
+                    "id_transaccion": str(uuid.uuid4())
                 }
                 resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=45)
                 if resp.get("status") == "SUCCESS":
@@ -1271,14 +1272,13 @@ def confirmar_guardado(m):
             bot.reply_to(m, "❌ Error registrando financiero: " + str(e))
         return
 
-    # 2. CONFIRMAR PRENDAS OPERATIVAS (CON DÍA CORRIDO SI ES DESPACHO EN PLANTA)
+    # 2. CONFIRMAR PRENDAS OPERATIVAS (CON CLAVE DE TRANSACCIÓN ÚNICA)
     if ses.get("filas"):
         cfg = ses
         filas = cfg["filas"]
         tipo_op = filas[0].get("tipo_operacion_detectada", cfg.get("tipo", "HUESPEDES"))
         hora_bogota = ahora_bog.strftime("%I:%M %p")
         
-        # Selección de día: Si es despacho de lencería, usa el día corrido (día anterior hábil)
         if cfg.get("movimiento") == "ENTREGA" and cfg.get("dia_despacho_corrido"):
             dia_actual = cfg.get("dia_despacho_corrido")
         else:
@@ -1288,6 +1288,9 @@ def confirmar_guardado(m):
                     dia_actual = int(filas[0]['fecha'].split('/')[0])
                 except Exception:
                     pass
+
+        # Generación de ID único por lote para evitar duplicación
+        token_transaccion = f"{cfg.get('hotel')}_{dia_actual}_{len(filas)}_{str(uuid.uuid4())[:8]}"
 
         bot.reply_to(m, f"⏳ Guardando en día *{dia_actual}* (Hora Bogotá: {hora_bogota})...", parse_mode='Markdown')
         try:
@@ -1302,15 +1305,18 @@ def confirmar_guardado(m):
                 "responsable_hotel": cfg.get("resp_hotel", "Recepción / Ama de llaves"),
                 "hora_sellada": hora_bogota,
                 "dia": dia_actual,
-                "filas": filas
+                "filas": filas,
+                "id_transaccion": token_transaccion
             }
+            
+            # Limpiar filas inmediatamente antes de esperar respuesta HTTP
+            sesiones[chat_id]["filas"] = []
             
             data_resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=90)
             
             if data_resp.get("status") == "SUCCESS":
                 hoja_dest = data_resp.get("hoja_guardada", cfg['hotel'])
                 bot.reply_to(m, f"✅ *¡Datos guardados con éxito!*\n📋 Registrado en: `{hoja_dest}`\n📅 Columna del día: *{dia_actual}*\n⏱️ Hora sellada: *{hora_bogota}*", parse_mode='Markdown')
-                sesiones[chat_id]["filas"] = []
                 bot.send_message(chat_id, "¿Qué deseas hacer a continuación?", reply_markup=menu_post_guardado())
             else:
                 bot.reply_to(m, "⚠️ Error del servidor: " + str(data_resp.get("mensaje")))
@@ -1336,7 +1342,7 @@ def procesar_texto_general(m):
     ahora_bog = obtener_ahora_bogota()
     hotel_nom = ses.get("hotel", "Hotel")
     
-    # AJUSTE DE PRENDAS DE DESPACHO EN SITIO (SI ALGO QUEDÓ O FALTÓ)
+    # AJUSTE DE PRENDAS DE DESPACHO EN SITIO
     if paso == "AJUSTAR_PRENDAS_DESPACHO_SITIO":
         bot.reply_to(m, "⚙️ Ajustando prendas para la entrega en el hotel...", parse_mode='Markdown')
         desp = ses.get("despacho_pendiente", {})
@@ -1578,5 +1584,5 @@ def procesar_texto_general(m):
 # =========================================================================
 threading.Thread(target=correr_web, daemon=True).start()
 
-print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Día Corrido OK / Cero Remisión Hilton-Wyndham / Boxer=Calzoncillo OK)")
+print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Día Corrido OK / Anti-Duplicado OK / Wyndham Alineado)")
 bot.infinity_polling()
