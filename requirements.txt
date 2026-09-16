@@ -1,4 +1,5 @@
 pyTelegramBotAPI
-requests
-Pillow
 google-genai
+requests
+pillow
+flask
