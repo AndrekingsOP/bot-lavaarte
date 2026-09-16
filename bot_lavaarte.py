@@ -3,6 +3,7 @@
 # MODELOS 100% FLASH + HOMOLOGACIÓN AISLADA POR HOTEL (FONTANA / OCEANÍA / WYNDHAM)
 # GESTIÓN FINANCIERA (LAVAARTE + CARLOS) + FIRMAS DIGITALES DRIVE + HORA BOGOTÁ
 # EDICIÓN EN DESTINO + CIERRE DEFINITIVO ANTI-DOBLE FIRMA + DÍA CORRIDO AUTOMÁTICO
+# SERVIDOR WEB FLASK EMBEBIDO ANTI-SUSPENSIÓN (RENDER 24/7)
 # =========================================================================
 
 import telebot
@@ -15,6 +16,8 @@ import time
 import threading
 import base64
 import unicodedata
+import os
+from flask import Flask
 from PIL import Image
 from google import genai
 from google.genai import types
@@ -43,6 +46,19 @@ sesiones = {}
 cola_fotos = {}
 timers = {}
 lock = threading.Lock()
+
+# -------------------------------------------------------------------------
+# SERVIDOR WEB FLASK PARA MANTENER ACTIVO EL SERVICIO EN RENDER (24/7)
+# -------------------------------------------------------------------------
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "Bot de Telegram Lavaarte Activo 24/7"
+
+def correr_web():
+    puerto = int(os.environ.get("PORT", 8080))
+    web_app.run(host="0.0.0.0", port=puerto)
 
 def obtener_ahora_bogota():
     """Garantiza la hora legal de Bogotá Colombia (GMT-5) sin desfase de servidor."""
@@ -1556,6 +1572,11 @@ def procesar_texto_general(m):
         enviar_mensaje_segmentado(chat_id, resumen_txt)
     except Exception as e:
         bot.reply_to(m, "❌ Error procesando texto: " + str(e))
+
+# =========================================================================
+# LANZAMIENTO DEL SERVIDOR WEB FLASK + POLLING DEL BOT
+# =========================================================================
+threading.Thread(target=correr_web, daemon=True).start()
 
 print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Día Corrido OK / Cero Remisión Hilton-Wyndham / Boxer=Calzoncillo OK)")
 bot.infinity_polling()
