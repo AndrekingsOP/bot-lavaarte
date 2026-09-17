@@ -36,7 +36,7 @@ GEMINI_API_KEY = 'AQ.Ab8RN6KHh9xczXiYb-Bm2DSL1Q8zsTyd695lbn3CF74Qc4OzGg'
 URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbxqnfe5kd_b0gB50r0IKw69pkRdsYq4vEHLIpwpRZpDYeTMq5TvWVCnsstm7Tj2W0we/exec'
 URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe1mA8h7iyMblV5ZhGCZG4PggzCppAt8T5Y79t-j_Rt7Pe95lcuQ9-6Fg/exec'
 
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(TOKEN, threaded=True)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 MODELOS_ROTACION = [
@@ -923,7 +923,7 @@ def manejar_opciones_entrega(call):
     sesiones[chat_id]["key"] = key
     sesiones[chat_id]["movimiento"] = "ENTREGA"
     
-    # Si es un hotel de Huéspedes (como Hilton o Wyndham), pasa DIRECTO a preguntar quién entrega y quién recibe
+    # En hoteles de Huéspedes pasa directo a los responsables de entrega
     if cfg.get("tipo") == "HUESPEDES":
         sesiones[chat_id]["paso_custodia"] = "ENT_QUIEN_ENTREGA_LAVAARTE"
         bot.edit_message_text(
@@ -1107,16 +1107,7 @@ def recibir_firma_web_app(message):
     except Exception as e:
         bot.send_message(chat_id, "❌ Error procesando firma en pantalla: " + str(e))
 
-def procesar_lote_fotos(chat_id):
-    with lock:
-        if chat_id not in cola_fotos or not cola_fotos[chat_id]:
-            return
-        imgs = list(cola_fotos[chat_id])
-        cola_fotos[chat_id] = []
-        if chat_id in timers:
-            timers[chat_id].cancel()
-            
-    cfg = sesiones.get(chat_id, ARBOL_SERVICIOS["wyndham_huespedes"])
+def _ejecutar_procesamiento_fotos_hilo(chat_id, imgs, cfg):
     ahora_bog = obtener_ahora_bogota()
     hotel_activo = cfg.get("hotel", "Hotel")
     
@@ -1193,11 +1184,11 @@ def procesar_lote_fotos(chat_id):
         return
 
     # 3. PROCESAMIENTO OPERATIVO GENERAL
-    bot.send_message(chat_id, f"🔍 Procesando {len(imgs)} foto(s) para *{hotel_activo}*...", parse_mode='Markdown')
     try:
+        bot.send_chat_action(chat_id, 'typing')
         filas = analizar_con_ia(imgs, cfg)
         if not filas:
-            bot.send_message(chat_id, "⚠️ No se detectaron prendas válidas en la(s) foto(s). Verifica la calidad o reintenta.")
+            bot.send_message(chat_id, "⚠️ No se detectaron prendas legibles en la imagen. Intenta con una toma más cercana o escribe los datos directamente.")
             return
         sesiones[chat_id]["filas"] = filas
         sesiones[chat_id]["total_fotos"] = len(imgs)
@@ -1205,6 +1196,22 @@ def procesar_lote_fotos(chat_id):
         enviar_mensaje_segmentado(chat_id, resumen_txt)
     except Exception as e:
         bot.send_message(chat_id, "❌ Error analizando imágenes: " + str(e))
+
+def procesar_lote_fotos(chat_id):
+    with lock:
+        if chat_id not in cola_fotos or not cola_fotos[chat_id]:
+            return
+        imgs = list(cola_fotos[chat_id])
+        cola_fotos[chat_id] = []
+        if chat_id in timers:
+            timers[chat_id].cancel()
+            
+    cfg = sesiones.get(chat_id, ARBOL_SERVICIOS["wyndham_huespedes"])
+    hotel_activo = cfg.get("hotel", "Hotel")
+    bot.send_message(chat_id, f"🔍 Analizando {len(imgs)} foto(s) para *{hotel_activo}*...", parse_mode='Markdown')
+    
+    # Se ejecuta en hilo independiente para no congelar la recepción de Telegram
+    threading.Thread(target=_ejecutar_procesamiento_fotos_hilo, args=[chat_id, imgs, cfg], daemon=True).start()
 
 @bot.message_handler(content_types=['photo'])
 def recibir_fotos(message):
@@ -1220,27 +1227,20 @@ def recibir_fotos(message):
         if chat_id not in cola_fotos:
             cola_fotos[chat_id] = []
         cola_fotos[chat_id].append(img)
+        cant = len(cola_fotos[chat_id])
         if chat_id in timers:
             timers[chat_id].cancel()
-        t = threading.Timer(2.5, procesar_lote_fotos, args=[chat_id])
+        t = threading.Timer(2.0, procesar_lote_fotos, args=[chat_id])
         timers[chat_id] = t
         t.start()
+        
+    bot.send_chat_action(chat_id, 'typing')
+    if cant == 1:
+        bot.reply_to(message, "⚡ Foto recibida. Esperando por si envías más fotos o procesando de inmediato...")
 
-@bot.message_handler(content_types=['voice', 'audio'])
-def recibir_audio(message):
-    chat_id = message.chat.id
-    if chat_id not in sesiones or (not sesiones[chat_id].get("hotel") and sesiones[chat_id].get("modulo") != "FINANCIERO"):
-        sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
-        
-    cfg = sesiones[chat_id]
-    bot.reply_to(message, "🎙️ Procesando audio...", parse_mode='Markdown')
-    
+def _procesar_audio_hilo(chat_id, audio_bytes, cfg):
     try:
-        file_id = message.voice.file_id if message.voice else message.audio.file_id
-        file_info = bot.get_file(file_id)
-        audio_bytes = bot.download_file(file_info.file_path)
         audio_part = types.Part.from_bytes(data=audio_bytes, mime_type="audio/ogg")
-        
         if cfg.get("modulo") == "FINANCIERO":
             tipo_mov = cfg.get("tipo_fin", "EGRESO")
             cuenta = cfg.get("cuenta_destino", "LAVAARTE")
@@ -1271,7 +1271,25 @@ def recibir_audio(message):
         resumen_txt = generar_resumen(filas, cfg, 1)
         enviar_mensaje_segmentado(chat_id, resumen_txt)
     except Exception as e:
-        bot.reply_to(message, "❌ Error procesando audio: " + str(e))
+        bot.send_message(chat_id, "❌ Error procesando audio: " + str(e))
+
+@bot.message_handler(content_types=['voice', 'audio'])
+def recibir_audio(message):
+    chat_id = message.chat.id
+    if chat_id not in sesiones or (not sesiones[chat_id].get("hotel") and sesiones[chat_id].get("modulo") != "FINANCIERO"):
+        sesiones[chat_id] = dict(ARBOL_SERVICIOS["wyndham_huespedes"])
+        
+    cfg = sesiones[chat_id]
+    bot.reply_to(message, "🎙️ Audio recibido, procesando...", parse_mode='Markdown')
+    bot.send_chat_action(chat_id, 'typing')
+    
+    try:
+        file_id = message.voice.file_id if message.voice else message.audio.file_id
+        file_info = bot.get_file(file_id)
+        audio_bytes = bot.download_file(file_info.file_path)
+        threading.Thread(target=_procesar_audio_hilo, args=[chat_id, audio_bytes, cfg], daemon=True).start()
+    except Exception as e:
+        bot.reply_to(message, "❌ Error descargando audio: " + str(e))
 
 @bot.message_handler(func=lambda m: m.text and m.text.strip().upper() in ['SI', 'SÍ'])
 def confirmar_guardado(m):
@@ -1391,6 +1409,33 @@ def cancelar_guardado(m):
         sesiones[chat_id]["filas"] = []
         sesiones[chat_id]["movimiento_fin_pendiente"] = None
     bot.reply_to(m, "❌ Operación cancelada. Puedes enviar nuevos datos o escribir *Hola*.", parse_mode='Markdown')
+
+def _procesar_texto_ia_hilo(chat_id, texto_ingresado, cfg):
+    bot.send_chat_action(chat_id, 'typing')
+    try:
+        filas = analizar_con_ia([texto_ingresado], cfg)
+        if not filas:
+            bot.send_message(chat_id, f"⚠️ No se detectaron prendas válidas para *{cfg['hotel']}*. Escribe la prenda, cantidad y habitación (ej: _'Hab 301 2 camisas y 1 pantalon'_).", parse_mode='Markdown')
+            return
+        sesiones[chat_id]["filas"] = filas
+        resumen_txt = generar_resumen(filas, cfg, 1)
+        enviar_mensaje_segmentado(chat_id, resumen_txt)
+    except Exception as e:
+        bot.send_message(chat_id, "❌ Error procesando texto: " + str(e))
+
+def _corregir_filas_ia_hilo(chat_id, texto_ingresado, ses):
+    bot.send_chat_action(chat_id, 'typing')
+    try:
+        datos_previos = json.dumps(ses["filas"], ensure_ascii=False)
+        filas_actualizadas = analizar_con_ia(None, ses, correccion_usuario="Lista actual: " + datos_previos + ". Modificación solicitada: " + str(texto_ingresado))
+        if not filas_actualizadas:
+            bot.send_message(chat_id, "⚠️ No se pudieron aplicar los cambios. Se conservan los datos previos.")
+            return
+        sesiones[chat_id]["filas"] = filas_actualizadas
+        resumen_txt = "✏️ *Lista actualizada:*\n\n" + generar_resumen(filas_actualizadas, ses)
+        enviar_mensaje_segmentado(chat_id, resumen_txt)
+    except Exception as e:
+        bot.send_message(chat_id, "❌ Error aplicando cambio: " + str(e))
 
 @bot.message_handler(func=lambda m: m.content_type == 'text' and m.text not in ['/start', '/menu'])
 def procesar_texto_general(m):
@@ -1640,17 +1685,7 @@ def procesar_texto_general(m):
             return
 
         bot.reply_to(m, "⚙️ Aplicando ajustes a la lista...")
-        try:
-            datos_previos = json.dumps(ses["filas"], ensure_ascii=False)
-            filas_actualizadas = analizar_con_ia(None, ses, correccion_usuario="Lista actual: " + datos_previos + ". Modificación solicitada: " + str(texto_ingresado))
-            if not filas_actualizadas:
-                bot.reply_to(m, "⚠️ No se pudieron aplicar los cambios o la lista quedó vacía. Conservando datos previos.")
-                return
-            sesiones[chat_id]["filas"] = filas_actualizadas
-            resumen_txt = "✏️ *Lista actualizada:*\n\n" + generar_resumen(filas_actualizadas, ses)
-            enviar_mensaje_segmentado(chat_id, resumen_txt)
-        except Exception as e:
-            bot.reply_to(m, "❌ Error aplicando cambio: " + str(e))
+        threading.Thread(target=_corregir_filas_ia_hilo, args=[chat_id, texto_ingresado, ses], daemon=True).start()
         return
 
     # 6. INGRESO DE PRENDAS POR TEXTO DIRECTO
@@ -1659,16 +1694,7 @@ def procesar_texto_general(m):
         
     cfg = sesiones[chat_id]
     bot.reply_to(m, f"📝 Procesando texto para *{cfg['hotel']}*...", parse_mode='Markdown')
-    try:
-        filas = analizar_con_ia([texto_ingresado], cfg)
-        if not filas:
-            bot.reply_to(m, f"⚠️ No se detectaron prendas válidas para *{cfg['hotel']}*. Escribe el nombre de la prenda, cantidad y habitación (ej: _'Hab 301 2 camisas y 1 pantalon'_).", parse_mode='Markdown')
-            return
-        sesiones[chat_id]["filas"] = filas
-        resumen_txt = generar_resumen(filas, cfg, 1)
-        enviar_mensaje_segmentado(chat_id, resumen_txt)
-    except Exception as e:
-        bot.reply_to(m, "❌ Error procesando texto: " + str(e))
+    threading.Thread(target=_procesar_texto_ia_hilo, args=[chat_id, texto_ingresado, cfg], daemon=True).start()
 
 # =========================================================================
 # LANZAMIENTO DEL SERVIDOR WEB FLASK + POLLING DEL BOT
