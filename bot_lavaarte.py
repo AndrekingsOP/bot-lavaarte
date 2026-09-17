@@ -351,7 +351,8 @@ def optimizar_imagen_para_ia(img_pil):
 def llamar_gemini_rotativo(contents):
     ultimo_error = None
     config_llamada = types.GenerateContentConfig(
-        temperature=0.1
+        temperature=0.1,
+        thinking_config=types.ThinkingConfig(thinking_budget=512)
     )
 
     for modelo in MODELOS_ROTACION:
@@ -368,10 +369,10 @@ def llamar_gemini_rotativo(contents):
                 err_str = str(e)
                 ultimo_error = e
                 if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "404", "NOT_FOUND", "403", "PERMISSION_DENIED"]):
-                    time.sleep(0.3)
+                    time.sleep(0.5)
                     break
                 else:
-                    time.sleep(0.3)
+                    time.sleep(0.5)
                     continue
     raise ultimo_error
 
@@ -395,6 +396,20 @@ def extraer_fecha_formato(texto):
 def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None):
     ahora_bog = obtener_ahora_bogota()
     fecha_hoy = ahora_bog.strftime("%d/%m/%Y")
+    
+    # Extraer fecha explícita si viene en el texto
+    if isinstance(contenido_multimodal, list):
+        for elem in contenido_multimodal:
+            if isinstance(elem, str):
+                f_det = extraer_fecha_formato(elem)
+                if f_det:
+                    fecha_hoy = f_det
+                    break
+    elif isinstance(contenido_multimodal, str):
+        f_det = extraer_fecha_formato(contenido_multimodal)
+        if f_det:
+            fecha_hoy = f_det
+
     hotel = config_sesion['hotel']
     servicio = config_sesion['servicio']
     tipo_op = config_sesion.get('tipo', 'HUESPEDES')
@@ -405,63 +420,62 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     es_manteleria = ("manteleria" in key or "manteleria" in servicio.lower())
     es_lenceria = es_servicio_lista_limpia(config_sesion)
 
-    prompt = f"""
-    Eres el auditor contable oficial de Lavaarte Lavandería SAS.
-    Operación activa: Hotel '{hotel}', Servicio '{servicio}', Clave: '{key}'.
-    
-    REGLAS ESTRICTAS Y AISLADAS POR HOTEL:
-    
-    1. REGLA BÓXER UNIVERSAL HUÉSPEDES:
-       - 'boxer', 'bóxer', 'boxers' es SIEMPRE 'Calzoncillo/Undershort' (Código 11, $1.700 en Wyndham / $3.306 en Norte).
-       - NUNCA clasificar un bóxer como pantaloneta.
-
-    2. REGLA CERO REMISIÓN EN HILTON Y WYNDHAM:
-       - En Hotel '{hotel}': {'NO EXISTE campo Remisión. Deja remision vacía ("")' if es_hilton_huespedes or es_wyndham_huespedes else 'Registra la remisión si existe'}.
-
-    3. HOTEL HAMPTON:
-       - Identifica OBLIGATORIAMENTE el tipo de servicio: 'Lavado' o 'Lavado en seco'.
-       - Lee la remisión correctamente.
-
-    4. HOTEL FONTANA:
-       - En Fontana NO EXISTE 'FACIAL'. 'mano' es ESTRICTAMENTE 'Toalla mano'.
-       - 'ajustable' se clasifica como 'Ajustable' (sin añadir sencilla).
-       - 'sobresabana', 'sabana', 'lisa' se clasifica como 'Sábana'.
-
-    5. HOTEL OCEANÍA:
-       - 'ajustable doble' -> 'Sábana ajustable doble'.
-       - 'ajustable' o 'ajustable sensilla' -> 'Sábana ajustable sencilla'.
-       - 'sobresabana doble' -> 'Sábana plana doble'.
-       - 'sobresabana' -> 'Sábana plana sencilla'.
-       - 'cojin' -> 'Cojín'.
-       - 'funda' -> 'Funda'.
-
-    6. WYNDHAM LENCERÍA vs MANTELERÍA:
-       - Lencería: Es el ÚNICO hotel con 'FACIAL'.
-       - Mantelería: 'blanco' -> 'Mantel blanco', 'azul' -> 'Mantel azul', 'servilleta' -> 'Servilleta'.
-
-    CATÁLOGO GLOBAL:
-    {CATALOGO_GLOBAL}
-    
-    {f"AJUSTE DEL USUARIO: {correccion_usuario}" if correccion_usuario else ""}
-    
-    Devuelve EXCLUSIVAMENTE un JSON válido (array de objetos sin markdown):
-    [
-      {{
-        "fecha": "{fecha_hoy}",
-        "remision": "{'' if (es_hilton_huespedes or es_wyndham_huespedes) else '1234'}",
-        "habitacion": "402",
-        "codigo": 25,
-        "prenda": "Pantalón/Pants",
-        "servicio": "Lavado en seco",
-        "cantidad": 2,
-        "valorUnitario": 5950,
-        "valorTotal": 11900,
-        "extra": "No",
-        "tipo_operacion_detectada": "{tipo_op}"
-      }}
-    ]
-    Si no detectas prendas reales del hotel, devuelve un arreglo vacío [].
-    """
+    # PROMPT DIFERENCIADO: LENCERÍA / MATRICES VS HUÉSPEDES
+    if es_lenceria:
+        prompt = f"""
+        Eres el auditor de control de lavandería industrial para Lavaarte Lavandería SAS.
+        Operación: Lencería / Mantelería de Hotel '{hotel}', Servicio '{servicio}'.
+        
+        REGLAS DE HOMOLOGACIÓN PARA ESTE HOTEL:
+        - Hotel Oceanía: 'ajustable doble' -> Sábana ajustable doble, 'ajustable'/'ajustable sensilla' -> Sábana ajustable sencilla, 'sabana doble' -> Sábana plana doble, 'sabana sensilla' -> Sábana plana sencilla, 'cuerpo' -> Toalla cuerpo, 'mano' -> Toalla mano, 'tapete' -> Toalla tapete, 'cortesia' -> Sábana cortesía, 'fundas'/'funda' -> Funda.
+        - Hotel Fontana: NO EXISTE FACIAL. 'mano' -> Toalla mano, 'cuerpo' -> Toalla cuerpo, 'tapete' -> Toalla tapete, 'ajustable' -> Ajustable, 'sabana'/'sobresabana' -> Sábana.
+        - Wyndham Lencería: Es el único con 'FACIAL'.
+        - Wyndham / Suite Mantelería: 'blanco' -> Mantel blanco, 'azul' -> Mantel azul, 'servilleta' -> Servilleta.
+        
+        {f"AJUSTE DEL USUARIO: {correccion_usuario}" if correccion_usuario else ""}
+        
+        Extrae cada ítem y su cantidad exacta. Devuelve EXCLUSIVAMENTE un JSON válido (array de objetos sin markdown):
+        [
+          {{
+            "fecha": "{fecha_hoy}",
+            "prenda": "Nombre de la prenda",
+            "cantidad": 10,
+            "tipo_operacion_detectada": "{tipo_op}"
+          }}
+        ]
+        """
+    else:
+        prompt = f"""
+        Eres el auditor contable oficial de Lavaarte Lavandería SAS.
+        Operación activa: Hotel '{hotel}', Servicio '{servicio}', Clave: '{key}'.
+        
+        REGLAS ESTRICTAS Y AISLADAS POR HOTEL:
+        1. REGLA BÓXER: 'boxer', 'bóxer' es SIEMPRE 'Calzoncillo/Undershort' (Código 11).
+        2. REGLA SIN REMISIÓN EN HILTON Y WYNDHAM: En '{hotel}' el campo remision debe quedar vacío ("").
+        3. Clasifica la prenda en el Catálogo y calcula los totales.
+        
+        CATÁLOGO GLOBAL:
+        {CATALOGO_GLOBAL}
+        
+        {f"AJUSTE DEL USUARIO: {correccion_usuario}" if correccion_usuario else ""}
+        
+        Devuelve EXCLUSIVAMENTE un JSON válido:
+        [
+          {{
+            "fecha": "{fecha_hoy}",
+            "remision": "{'' if (es_hilton_huespedes or es_wyndham_huespedes) else '1234'}",
+            "habitacion": "402",
+            "codigo": 25,
+            "prenda": "Pantalón/Pants",
+            "servicio": "Lavado en seco",
+            "cantidad": 2,
+            "valorUnitario": 5950,
+            "valorTotal": 11900,
+            "extra": "No",
+            "tipo_operacion_detectada": "{tipo_op}"
+          }}
+        ]
+        """
     
     contents = [prompt]
     if isinstance(contenido_multimodal, list):
@@ -488,28 +502,29 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
                 es_wyndham_huespedes=es_wyndham_huespedes, 
                 es_manteleria=es_manteleria
             )
-            if not f.get("servicio") or f.get("servicio") == "":
-                f["servicio"] = "Lavado en seco" if any(w in f["prenda"].lower() for w in ["pantalón", "pantalon", "chaqueta", "vestido", "abrigo", "traje", "blazer"]) else "Lavado"
+            if not es_lenceria:
+                if not f.get("servicio") or f.get("servicio") == "":
+                    f["servicio"] = "Lavado en seco" if any(w in f["prenda"].lower() for w in ["pantalón", "pantalon", "chaqueta", "vestido", "abrigo", "traje", "blazer"]) else "Lavado"
 
-            if es_hilton_huespedes or es_wyndham_huespedes:
-                f["remision"] = ""
+                if es_hilton_huespedes or es_wyndham_huespedes:
+                    f["remision"] = ""
 
-            if es_wyndham_huespedes:
-                if f["prenda"] == "Pantalón/Pants":
-                    f["codigo"] = 25
-                    f["servicio"] = "Lavado en seco"
-                    f["valorUnitario"] = 5950
-                    f["valorTotal"] = a_entero(f.get("cantidad", 1)) * 5950
-                elif f["prenda"] == "Brassiere/Brassiere":
-                    f["codigo"] = 4
-                    f["servicio"] = "Lavado"
-                    f["valorUnitario"] = 3500
-                    f["valorTotal"] = a_entero(f.get("cantidad", 1)) * 3500
-                elif f["prenda"] == "Calzoncillo/Undershort":
-                    f["codigo"] = 11
-                    f["servicio"] = "Lavado"
-                    f["valorUnitario"] = 1700
-                    f["valorTotal"] = a_entero(f.get("cantidad", 1)) * 1700
+                if es_wyndham_huespedes:
+                    if f["prenda"] == "Pantalón/Pants":
+                        f["codigo"] = 25
+                        f["servicio"] = "Lavado en seco"
+                        f["valorUnitario"] = 5950
+                        f["valorTotal"] = a_entero(f.get("cantidad", 1)) * 5950
+                    elif f["prenda"] == "Brassiere/Brassiere":
+                        f["codigo"] = 4
+                        f["servicio"] = "Lavado"
+                        f["valorUnitario"] = 3500
+                        f["valorTotal"] = a_entero(f.get("cantidad", 1)) * 3500
+                    elif f["prenda"] == "Calzoncillo/Undershort":
+                        f["codigo"] = 11
+                        f["servicio"] = "Lavado"
+                        f["valorUnitario"] = 1700
+                        f["valorTotal"] = a_entero(f.get("cantidad", 1)) * 1700
 
     if es_wyndham_huespedes and isinstance(filas, list):
         filas_consolidadas = {}
@@ -723,9 +738,8 @@ def menu_recibir_entregar(hotel_key):
 def menu_sub_entrega(hotel_key):
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(
-        InlineKeyboardButton("🤝 Entrega Directa en Hotel", callback_data="entrega_directa_" + str(hotel_key)),
-        InlineKeyboardButton("📦 Cargar Despacho (En Planta)", callback_data="despacho_planta_" + str(hotel_key)),
-        InlineKeyboardButton("🔎 Verificar Despacho de Planta", callback_data="confirmar_hotel_" + str(hotel_key)),
+        InlineKeyboardButton("📦 1. Cargar Despacho (En Planta)", callback_data="despacho_planta_" + str(hotel_key)),
+        InlineKeyboardButton("🤝 2. Confirmar Entrega en Hotel (Conductor)", callback_data="confirmar_hotel_" + str(hotel_key)),
         InlineKeyboardButton("⬅️ Volver", callback_data="sel_" + str(hotel_key))
     )
     return markup
@@ -923,37 +937,10 @@ def manejar_opciones_entrega(call):
     sesiones[chat_id]["key"] = key
     sesiones[chat_id]["movimiento"] = "ENTREGA"
     
-    # En hoteles de Huéspedes pasa directo a los responsables de entrega
-    if cfg.get("tipo") == "HUESPEDES":
-        sesiones[chat_id]["paso_custodia"] = "ENT_QUIEN_ENTREGA_LAVAARTE"
-        bot.edit_message_text(
-            f"📤 *ENTREGA DE ROPA - {cfg['hotel']}*\n\n1️⃣ ¿Quién entrega la ropa por parte de Lavaarte? (Escribe el nombre del conductor):",
-            chat_id, call.message.message_id,
-            parse_mode='Markdown'
-        )
-        return
-
     bot.edit_message_text(
         "📤 *ENTREGA DE ROPA - " + str(cfg['hotel']) + "*\n\nSelecciona el momento de la entrega:",
         chat_id, call.message.message_id,
         reply_markup=menu_sub_entrega(key),
-        parse_mode='Markdown'
-    )
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('entrega_directa_'))
-def manejar_entrega_directa(call):
-    chat_id = call.message.chat.id
-    bot.answer_callback_query(call.id)
-    key = call.data.replace('entrega_directa_', '')
-    cfg = ARBOL_SERVICIOS.get(key, sesiones.get(chat_id, {}))
-    sesiones[chat_id] = dict(cfg)
-    sesiones[chat_id]["key"] = key
-    sesiones[chat_id]["movimiento"] = "ENTREGA"
-    sesiones[chat_id]["paso_custodia"] = "ENT_QUIEN_ENTREGA_LAVAARTE"
-    
-    bot.edit_message_text(
-        f"📤 *ENTREGA DE ROPA - {cfg.get('hotel', 'Hotel')}*\n\n1️⃣ ¿Quién entrega la ropa por parte de Lavaarte? (Escribe el nombre del conductor):",
-        chat_id, call.message.message_id,
         parse_mode='Markdown'
     )
 
@@ -1188,7 +1175,7 @@ def _ejecutar_procesamiento_fotos_hilo(chat_id, imgs, cfg):
         bot.send_chat_action(chat_id, 'typing')
         filas = analizar_con_ia(imgs, cfg)
         if not filas:
-            bot.send_message(chat_id, "⚠️ No se detectaron prendas legibles en la imagen. Intenta con una toma más cercana o escribe los datos directamente.")
+            bot.send_message(chat_id, "⚠️ No se detectaron prendas legibles en la imagen. Intenta con una toma más clara o escribe los datos directamente.")
             return
         sesiones[chat_id]["filas"] = filas
         sesiones[chat_id]["total_fotos"] = len(imgs)
@@ -1209,8 +1196,6 @@ def procesar_lote_fotos(chat_id):
     cfg = sesiones.get(chat_id, ARBOL_SERVICIOS["wyndham_huespedes"])
     hotel_activo = cfg.get("hotel", "Hotel")
     bot.send_message(chat_id, f"🔍 Analizando {len(imgs)} foto(s) para *{hotel_activo}*...", parse_mode='Markdown')
-    
-    # Se ejecuta en hilo independiente para no congelar la recepción de Telegram
     threading.Thread(target=_ejecutar_procesamiento_fotos_hilo, args=[chat_id, imgs, cfg], daemon=True).start()
 
 @bot.message_handler(content_types=['photo'])
@@ -1236,7 +1221,7 @@ def recibir_fotos(message):
         
     bot.send_chat_action(chat_id, 'typing')
     if cant == 1:
-        bot.reply_to(message, "⚡ Foto recibida. Esperando por si envías más fotos o procesando de inmediato...")
+        bot.reply_to(message, "⚡ Foto recibida. Procesando...")
 
 def _procesar_audio_hilo(chat_id, audio_bytes, cfg):
     try:
@@ -1415,7 +1400,7 @@ def _procesar_texto_ia_hilo(chat_id, texto_ingresado, cfg):
     try:
         filas = analizar_con_ia([texto_ingresado], cfg)
         if not filas:
-            bot.send_message(chat_id, f"⚠️ No se detectaron prendas válidas para *{cfg['hotel']}*. Escribe la prenda, cantidad y habitación (ej: _'Hab 301 2 camisas y 1 pantalon'_).", parse_mode='Markdown')
+            bot.send_message(chat_id, f"⚠️ No se detectaron prendas válidas para *{cfg['hotel']}*. Intenta reenviar el texto.", parse_mode='Markdown')
             return
         sesiones[chat_id]["filas"] = filas
         resumen_txt = generar_resumen(filas, cfg, 1)
@@ -1603,18 +1588,6 @@ def procesar_texto_general(m):
         ses["resp_hotel"] = "Por entregar en hotel"
         ses["paso_custodia"] = None
         bot.reply_to(m, f"✅ Registrado despachador: *{texto_ingresado}*\n\n📸 Ahora puedes enviar las fotos, audio o texto de las prendas despachadas:", parse_mode='Markdown')
-        return
-
-    if paso == "ENT_QUIEN_ENTREGA_LAVAARTE":
-        ses["resp_lavaarte"] = texto_ingresado
-        ses["paso_custodia"] = "ENT_QUIEN_RECIBE_HOTEL"
-        bot.reply_to(m, f"✅ Entrega por Lavaarte: *{texto_ingresado}*\n\n2️⃣ ¿Quién recibe por parte del hotel? (Escribe nombre y cargo):", parse_mode='Markdown')
-        return
-
-    if paso == "ENT_QUIEN_RECIBE_HOTEL":
-        ses["resp_hotel"] = texto_ingresado
-        ses["paso_custodia"] = None
-        bot.reply_to(m, f"✅ Recibe por el hotel: *{texto_ingresado}*\n\n📸 *¡Listo!* Ya puedes enviar las fotos de las prendas o planillas, audios o escribir las prendas entregadas:", parse_mode='Markdown')
         return
 
     if paso == "CONFIRMAR_QUIEN_RECIBE_HOTEL":
