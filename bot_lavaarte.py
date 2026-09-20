@@ -261,13 +261,13 @@ def homologar_prenda_telegram(nombre_prenda, hotel_nom="", es_lenceria=False, es
             return "Blusa/ Camisa"
         if "camiseta" in norm:
             return "Camiseta Sport"
-        if "chaleco" in norm:
+        if "chaleco" in norm or "chalecos" in norm:
             return "Chaleco"
         if "delantal" in norm or "delantales" in norm:
             return "Delantal"
         if "overol" in norm:
             return "Overol"
-        if "gorra" in norm:
+        if "gorra" in norm or "gorro" in norm:
             return "Gorra/Cap"
         return nombre_prenda.title()
 
@@ -448,27 +448,17 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     if es_eficacia:
         prompt = f"""
         Eres el auditor oficial de Lavaarte Lavandería SAS para el cliente 'EFICACIA DOTACIONES'.
-        En las planillas o fotos manuscritas de Eficacia, cada línea o grupo pertenece a una EMPRESA / CLIENTE cliente de Eficacia.
+        En las planillas o notas manuscritas de Eficacia, cada línea o bloque pertenece a una EMPRESA / CLIENTE cliente de Eficacia.
         Estructura típica de las notas:
         [Nombre Empresa] = [Cantidad] [Prenda] + [Cantidad] [Prenda]
-        Ejemplos reales:
-        - '1 Bolso eficacia' -> Empresa: 'Eficacia', Prenda: 'Bolsa Grande', Cantidad: 1
-        - 'Kikes = 2 Pantalones' -> Empresa: 'Kikes', Prenda: 'Pantalón/Pants/JEANS', Cantidad: 2
-        - 'Mondelez = 1 Chaqueta + 1 pantalon' -> Empresa: 'Mondelez' (Prendas: Chaqueta cant 1, Pantalón cant 1)
-        - 'Seguridad = 1 Camisa' -> Empresa: 'Seguridad', Prenda: 'Blusa/ Camisa', Cantidad: 1
-        - 'Novous = 2 Pantalones' -> Empresa: 'Novous', Prenda: 'Pantalón/Pants/JEANS', Cantidad: 2
-        - 'Henkel = 1 Camisa Blanca' -> Empresa: 'Henkel', Prenda: 'Blusa/ Camisa', Cantidad: 1
-        - 'Exito = 2 chalecos - 1 Camiseta' -> Empresa: 'Exito', Prenda: Chaleco cant 2, Camiseta Sport cant 1
-        - 'Pajoy = 1 Chaqueta' -> Empresa: 'Pajoy', Prenda: Chaqueta cant 1
-        - 'Pajoy = 4 Pantalones - 2 Camisetas' -> Empresa: 'Pajoy', Prenda: Pantalón cant 4, Camiseta Sport cant 2
-        - 'Nivea = 1 Camiseta + 1 pantalon' -> Empresa: 'Nivea', Prenda: Camiseta cant 1, Pantalón cant 1
-        - 'Galderma = 2 Morrales + 1 Morral' -> Empresa: 'Galderma', Prenda: Morral / Maleta cant 3
-        - 'Central Cervecero = 1 pantalon, 1 Chaqueta' -> Empresa: 'Central Cervecero'
-        - 'Alpina = 4 Camisas, 2 Delantales, 1 Chaqueta' -> Empresa: 'Alpina'
-
+        
+        Reglas de extracción:
+        - Cada empresa debe colocarse en el campo 'habitacion' (ej: 'Kikes', 'Mondelez', 'Seguridad', 'Novous', 'Henkel', 'Exito', 'Pajoy', 'Nivea', 'Galderma', 'Central Cervecero', 'Alpina', 'Eficacia').
+        - Si dice '1 Bolso eficacia', la empresa es 'Eficacia' y la prenda es 'Bolsa Grande'.
+        - Homologa las prendas al catálogo de Eficacia: 'Bolsa Grande', 'Morral / Maleta', 'Pantalón/Pants/JEANS', 'Chaqueta/Jacket', 'Blusa/ Camisa', 'Camiseta Sport', 'Chaleco', 'Delantal', 'Overol', 'Gorra/Cap'.
+        
         {f"AJUSTE DEL USUARIO: {correccion_usuario}" if correccion_usuario else ""}
 
-        IMPORTANTE: Devuelve obligatoriamente la empresa en el campo 'habitacion' (o 'empresa') para que el sistema consolide por empresa.
         Devuelve EXCLUSIVAMENTE un JSON válido (array de objetos sin markdown):
         [
           {{
@@ -822,9 +812,8 @@ def menu_recibir_entregar(hotel_key):
 def menu_sub_entrega(hotel_key):
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(
-        InlineKeyboardButton("🤝 1. Entrega Directa en Hotel", callback_data="entrega_directa_" + str(hotel_key)),
-        InlineKeyboardButton("📦 2. Cargar Despacho (En Planta)", callback_data="despacho_planta_" + str(hotel_key)),
-        InlineKeyboardButton("🔎 3. Verificar Despacho de Planta", callback_data="confirmar_hotel_" + str(hotel_key)),
+        InlineKeyboardButton("📦 1. Cargar Despacho (En Planta)", callback_data="despacho_planta_" + str(hotel_key)),
+        InlineKeyboardButton("🤝 2. Confirmar Entrega en Hotel (Conductor)", callback_data="confirmar_hotel_" + str(hotel_key)),
         InlineKeyboardButton("⬅️ Volver", callback_data="sel_" + str(hotel_key))
     )
     return markup
@@ -862,7 +851,6 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
         resumen += "📊 *Total Dotaciones:* " + str(total_p) + " prendas\n"
         resumen += "📋 *DESGLOSE CONSOLIDADO POR EMPRESA:*\n"
         
-        # Agrupar ordenado por Empresa
         filas_por_empresa = {}
         for it in filas:
             cta = str(it.get('habitacion', it.get('empresa', 'GENERAL'))).strip().title()
@@ -911,23 +899,23 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
     resumen += "• O escribe cualquier corrección directa."
     return resumen
 
-def armar_texto_despacho(desp, hotel_nom, servicio_nom="Lencería"):
+def armar_texto_despacho(desp, hotel_nom, servicio_nom="Lencería", resp_conductor="Conductor Lavaarte"):
     items_detalle = desp.get("items_detalle", [])
     txt_info = f"🏨 *HOTEL / SERVICIO:* {hotel_nom} - {servicio_nom} (*ENTREGA*)\n"
     txt_info += f"📅 *FECHA:* {desp.get('fecha')} ({desp.get('hora')})\n"
-    txt_info += f"👤 *Responsable Lavaarte:* `{desp.get('despachado_por', 'Conductor')}`\n"
+    txt_info += f"👤 *Responsable Lavaarte:* `{resp_conductor}`\n"
     txt_info += f"🏨 *Responsable Hotel:* `Recepción / Ama de llaves`\n"
     txt_info += f"📊 *Total Prendas:* {desp.get('total_prendas', 0)}\n"
-    txt_info += "📋 *LISTA DE CONTEO (DESPACHO DE PLANTA):*\n"
+    txt_info += "📋 *LISTA DE CONTEO:*\n"
     
     if items_detalle:
         items_ord = sorted(items_detalle, key=lambda x: str(x.get('prenda', '')).lower())
         for it in items_ord:
             txt_info += f"• {it['prenda']} - Cant: *{it['cantidad']}*\n"
     else:
-        txt_info += f"• {desp.get('notas', 'Despacho registrado')}\n"
+        txt_info += f"• {desp.get('notas', 'Despacho registrado en planta')}\n"
         
-    txt_info += "\n💬 *¿Las cantidades coinciden con lo que tienes físicamente en el hotel?*\n"
+    txt_info += "\n💬 *¿Qué deseas hacer?*\n"
     txt_info += "• Selecciona *✅ Todo Conforme* para proceder a la entrega.\n"
     txt_info += "• O selecciona *✏️ Modificar Entrega* si falta o quedó algún paquete."
     return txt_info
@@ -1028,36 +1016,10 @@ def manejar_opciones_entrega(call):
     sesiones[chat_id]["key"] = key
     sesiones[chat_id]["movimiento"] = "ENTREGA"
     
-    if cfg.get("tipo") == "HUESPEDES":
-        sesiones[chat_id]["paso_custodia"] = "ENT_QUIEN_ENTREGA_LAVAARTE"
-        bot.edit_message_text(
-            f"📤 *ENTREGA DE ROPA - {cfg['hotel']}*\n\n1️⃣ ¿Quién entrega la ropa por parte de Lavaarte? (Escribe el nombre del conductor):",
-            chat_id, call.message.message_id,
-            parse_mode='Markdown'
-        )
-        return
-
     bot.edit_message_text(
         "📤 *ENTREGA DE ROPA - " + str(cfg['hotel']) + "*\n\nSelecciona el momento de la entrega:",
         chat_id, call.message.message_id,
         reply_markup=menu_sub_entrega(key),
-        parse_mode='Markdown'
-    )
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('entrega_directa_'))
-def manejar_entrega_directa(call):
-    chat_id = call.message.chat.id
-    bot.answer_callback_query(call.id)
-    key = call.data.replace('entrega_directa_', '')
-    cfg = ARBOL_SERVICIOS.get(key, sesiones.get(chat_id, {}))
-    sesiones[chat_id] = dict(cfg)
-    sesiones[chat_id]["key"] = key
-    sesiones[chat_id]["movimiento"] = "ENTREGA"
-    sesiones[chat_id]["paso_custodia"] = "ENT_QUIEN_ENTREGA_LAVAARTE"
-    
-    bot.edit_message_text(
-        f"📤 *ENTREGA DE ROPA - {cfg.get('hotel', 'Hotel')}*\n\n1️⃣ ¿Quién entrega la ropa por parte de Lavaarte? (Escribe el nombre del conductor):",
-        chat_id, call.message.message_id,
         parse_mode='Markdown'
     )
 
@@ -1076,7 +1038,24 @@ def iniciar_despacho_planta(call):
     txt += "Escribe el nombre de quién despacha la ropa en planta:"
     bot.edit_message_text(txt, chat_id, call.message.message_id, parse_mode='Markdown')
 
-def _consultar_despacho_async(chat_id, cfg, hotel_nom, dia_logistico):
+@bot.callback_query_handler(func=lambda call: call.data.startswith('confirmar_hotel_'))
+def iniciar_confirmacion_hotel(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    key = call.data.replace('confirmar_hotel_', '')
+    cfg = ARBOL_SERVICIOS.get(key, sesiones.get(chat_id, {}))
+    sesiones[chat_id] = dict(cfg)
+    sesiones[chat_id]["key"] = key
+    sesiones[chat_id]["movimiento"] = "ENTREGA"
+    sesiones[chat_id]["paso_custodia"] = "ENT_QUIEN_ENTREGA_LAVAARTE"
+    
+    bot.edit_message_text(
+        f"🤝 *ENTREGA EN HOTEL - {cfg.get('hotel', 'Hotel')}*\n\n1️⃣ ¿Quién entrega la ropa por parte de Lavaarte? (Escribe el nombre del conductor):",
+        chat_id, call.message.message_id,
+        parse_mode='Markdown'
+    )
+
+def _consultar_despacho_async(chat_id, cfg, hotel_nom, dia_logistico, resp_conductor):
     try:
         payload = {
             "accion": "CONSULTAR_DESPACHO",
@@ -1089,24 +1068,14 @@ def _consultar_despacho_async(chat_id, cfg, hotel_nom, dia_logistico):
         
         if resp.get("status") == "SUCCESS":
             desp = resp.get("despacho", {})
+            desp["despachado_por"] = resp_conductor
             sesiones[chat_id]["despacho_pendiente"] = desp
-            txt_info = armar_texto_despacho(desp, hotel_nom, cfg.get("servicio", "Lencería"))
+            txt_info = armar_texto_despacho(desp, hotel_nom, cfg.get("servicio", "Lencería"), resp_conductor)
             bot.send_message(chat_id, txt_info, reply_markup=menu_confirmacion_despacho_en_sitio(), parse_mode='Markdown')
         else:
             bot.send_message(chat_id, f"⚠️ No se encontró un despacho activo registrado de planta para el día {dia_logistico} en *{hotel_nom}*.\nVerifica si en planta ya fue cargado el despacho.", parse_mode='Markdown')
     except Exception as e:
         bot.send_message(chat_id, "❌ Error consultando despacho: " + str(e))
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('confirmar_hotel_'))
-def iniciar_confirmacion_hotel(call):
-    chat_id = call.message.chat.id
-    bot.answer_callback_query(call.id)
-    cfg = sesiones.get(chat_id, {})
-    hotel_nom = cfg.get("hotel", "Hotel")
-    dia_logistico = calcular_dia_corrido_logistica()
-    
-    bot.edit_message_text(f"🔎 Buscando despacho activo correspondiente al día *{dia_logistico}* para *{hotel_nom}*...", chat_id, call.message.message_id, parse_mode='Markdown')
-    threading.Thread(target=_consultar_despacho_async, args=[chat_id, cfg, hotel_nom, dia_logistico], daemon=True).start()
 
 @bot.callback_query_handler(func=lambda call: call.data in ['despacho_ok_proceder', 'despacho_modificar_en_sitio'])
 def manejar_decision_entrega_sitio(call):
@@ -1588,7 +1557,7 @@ def procesar_texto_general(m):
             desp["notas"] = ajustado.get("notas", desp.get("notas", ""))
             ses["despacho_pendiente"] = desp
             
-            txt_nuevo = "✏️ *DESPACHO ACTUALIZADO EN SITIO:*\n\n" + armar_texto_despacho(desp, hotel_nom, ses.get("servicio", "Lencería"))
+            txt_nuevo = "✏️ *DESPACHO ACTUALIZADO EN SITIO:*\n\n" + armar_texto_despacho(desp, hotel_nom, ses.get("servicio", "Lencería"), ses.get("resp_lavaarte", "Conductor Lavaarte"))
             bot.send_message(chat_id, txt_nuevo, reply_markup=menu_confirmacion_despacho_en_sitio(), parse_mode='Markdown')
         except Exception as e:
             bot.reply_to(m, "❌ Error ajustando prendas: " + str(e))
@@ -1714,9 +1683,20 @@ def procesar_texto_general(m):
         return
 
     if paso == "ENT_QUIEN_ENTREGA_LAVAARTE":
-        ses["resp_lavaarte"] = texto_ingresado
-        ses["paso_custodia"] = "ENT_QUIEN_RECIBE_HOTEL"
-        bot.reply_to(m, f"✅ Entrega por Lavaarte: *{texto_ingresado}*\n\n2️⃣ ¿Quién recibe por parte del hotel? (Escribe nombre y cargo):", parse_mode='Markdown')
+        resp_conductor = texto_ingresado
+        ses["resp_lavaarte"] = resp_conductor
+        ses["paso_custodia"] = None
+        
+        # En hoteles de huéspedes pasa directo a pedir quién recibe
+        if ses.get("tipo") == "HUESPEDES":
+            ses["paso_custodia"] = "ENT_QUIEN_RECIBE_HOTEL"
+            bot.reply_to(m, f"✅ Entrega por Lavaarte: *{resp_conductor}*\n\n2️⃣ ¿Quién recibe por parte del hotel? (Escribe nombre y cargo):", parse_mode='Markdown')
+            return
+            
+        # En hoteles de Lencería / Matrices busca automáticamente el despacho del día hábil anterior
+        dia_logistico = calcular_dia_corrido_logistica()
+        bot.reply_to(m, f"✅ Conductor: *{resp_conductor}*\n🔎 Buscando despacho activo correspondiente al día *{dia_logistico}* para *{hotel_nom}*...", parse_mode='Markdown')
+        threading.Thread(target=_consultar_despacho_async, args=[chat_id, ses, hotel_nom, dia_logistico, resp_conductor], daemon=True).start()
         return
 
     if paso == "ENT_QUIEN_RECIBE_HOTEL":
@@ -1744,7 +1724,7 @@ def procesar_texto_general(m):
                 "hotel": hotel_nom,
                 "fila_despacho": desp.get("fila"),
                 "total_prendas": desp.get("total_prendas", 0),
-                "responsable_lavaarte": desp.get("despachado_por", "Conductor"),
+                "responsable_lavaarte": ses.get("resp_lavaarte", desp.get("despachado_por", "Conductor")),
                 "responsable_hotel": quien_recibe,
                 "hora_sellada": hora_bogota,
                 "detalle_resumen": detalle_notas
@@ -1756,7 +1736,7 @@ def procesar_texto_general(m):
                 
                 txt_ok = f"🤝 *¡ENTREGA CONFIRMADA EXITOSAMENTE!*\n\n"
                 txt_ok += f"🏨 *Hotel:* {hotel_nom}\n"
-                txt_ok += f"👤 *Entregado por:* {desp.get('despachado_por')}\n"
+                txt_ok += f"👤 *Entregado por:* {ses.get('resp_lavaarte', desp.get('despachado_por'))}\n"
                 txt_ok += f"✍️ *Recibido por:* {quien_recibe}\n"
                 txt_ok += f"📊 *Prendas entregadas:* {desp.get('total_prendas')}\n"
                 txt_ok += f"⏱️ *Hora sellada oficial (Bogotá):* *{hora_bogota}*\n\n"
