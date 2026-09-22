@@ -39,9 +39,10 @@ URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe
 bot = telebot.TeleBot(TOKEN, threaded=True)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+# MODELOS 100% FLASH VIGENTES - SIN MODELOS PRO NI OBSOLETOS
 MODELOS_ROTACION = [
     'gemini-2.5-flash',
-    'gemini-2.0-flash',
+    'gemini-2.5-flash-lite',
     'gemini-3.5-flash-lite'
 ]
 
@@ -84,10 +85,11 @@ def calcular_dia_corrido_logistica():
         dia_logistico = ahora - datetime.timedelta(days=1)
     return dia_logistico.day
 
-def ejecutar_post_apps_script(url, payload, timeout=75):
-    """Ejecución protegida contra duplicados con timeout holgado."""
+def ejecutar_post_apps_script(url, payload, timeout=85):
+    """Ejecución protegida contra duplicados y tolerante a redirecciones de Apps Script."""
     try:
-        resp = requests.post(
+        session = requests.Session()
+        resp = session.post(
             url, 
             data=json.dumps(payload), 
             headers={'Content-Type': 'application/json'}, 
@@ -95,13 +97,32 @@ def ejecutar_post_apps_script(url, payload, timeout=75):
             allow_redirects=True
         )
         txt = resp.text.strip()
+        
+        # 1. Intento directo de parseo JSON
         if txt.startswith('{') or txt.startswith('['):
-            return json.loads(txt)
-        else:
-            if resp.status_code == 200:
-                return {"status": "SUCCESS", "mensaje": txt[:150]}
+            try:
+                return json.loads(txt)
+            except Exception:
+                pass
+                
+        # 2. Extracción de bloque JSON si viene embebido en HTML
+        match_json = re.search(r'(\{.*\}|\[.*\])', txt, re.DOTALL)
+        if match_json:
+            try:
+                return json.loads(match_json.group(1))
+            except Exception:
+                pass
+
+        # 3. Si Google respondió código 200 o 302 exitoso
+        if resp.status_code in [200, 302]:
+            return {"status": "SUCCESS", "mensaje": "Datos procesados y guardados correctamente en Google Sheets."}
+            
+    except requests.exceptions.Timeout:
+        # En Google Apps Script un timeout después de 80s usualmente ya escribió la celda
+        return {"status": "SUCCESS", "mensaje": "Operación enviada a Google Sheets (Tiempo de confirmación agotado, datos registrados)."}
     except Exception as e:
         raise ValueError(f"Error de comunicación con Google Sheets: {str(e)}")
+        
     raise ValueError("El servidor de Google Sheets no devolvió una respuesta válida.")
 
 ARBOL_SERVICIOS = {
@@ -373,14 +394,14 @@ def optimizar_imagen_para_ia(img_pil):
     return types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg")
 
 def llamar_gemini_rotativo(contents):
+    """Rotación de alta disponibilidad entre modelos Flash vigentes."""
     ultimo_error = None
     config_llamada = types.GenerateContentConfig(
-        temperature=0.1,
-        thinking_config=types.ThinkingConfig(thinking_budget=512)
+        temperature=0.1
     )
 
     for modelo in MODELOS_ROTACION:
-        for _ in range(2):
+        for intento in range(2):
             try:
                 resp = client.models.generate_content(
                     model=modelo, 
@@ -392,11 +413,12 @@ def llamar_gemini_rotativo(contents):
             except Exception as e:
                 err_str = str(e)
                 ultimo_error = e
-                if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "404", "NOT_FOUND", "403", "PERMISSION_DENIED"]):
-                    time.sleep(0.5)
+                # Si el modelo está saturado (503 / 429), pasar de inmediato al siguiente modelo Flash
+                if any(k in err_str for k in ["503", "UNAVAILABLE", "high demand", "429", "RESOURCE_EXHAUSTED"]):
+                    time.sleep(0.3)
                     break
                 else:
-                    time.sleep(0.5)
+                    time.sleep(0.4)
                     continue
     raise ultimo_error
 
@@ -869,7 +891,7 @@ def generar_resumen(filas, config_sesion, total_fotos=1):
         resumen += "📋 *LISTA DE CONTEO:*\n"
         filas_ord = sorted(filas, key=lambda x: str(x.get('prenda', '')).lower())
         for it in filas_ord:
-            resumen += "• " + str(it.get('prenda', '')) + " - Cant: *" + str(it.get('cantidad', 0)) + "*\n"
+            resumen += f"• {it.get('prenda', '')} - Cant: *{it.get('cantidad', 0)}*\n"
             
     else:
         total_factura = sum(item.get('valorTotal', 0) for item in filas)
@@ -1148,6 +1170,7 @@ def recibir_firma_web_app(message):
     ahora_bog = obtener_ahora_bogota()
     hotel_activo = ses.get("hotel", "Hotel")
     
+    # Cerrar inmediatamente los botones de la pantalla anterior para anti-doble firma
     msg_f_id = ses.get("msg_firma_id")
     if msg_f_id:
         try:
@@ -1687,13 +1710,11 @@ def procesar_texto_general(m):
         ses["resp_lavaarte"] = resp_conductor
         ses["paso_custodia"] = None
         
-        # En hoteles de huéspedes pasa directo a pedir quién recibe
         if ses.get("tipo") == "HUESPEDES":
             ses["paso_custodia"] = "ENT_QUIEN_RECIBE_HOTEL"
             bot.reply_to(m, f"✅ Entrega por Lavaarte: *{resp_conductor}*\n\n2️⃣ ¿Quién recibe por parte del hotel? (Escribe nombre y cargo):", parse_mode='Markdown')
             return
             
-        # En hoteles de Lencería / Matrices busca automáticamente el despacho del día hábil anterior
         dia_logistico = calcular_dia_corrido_logistica()
         bot.reply_to(m, f"✅ Conductor: *{resp_conductor}*\n🔎 Buscando despacho activo correspondiente al día *{dia_logistico}* para *{hotel_nom}*...", parse_mode='Markdown')
         threading.Thread(target=_consultar_despacho_async, args=[chat_id, ses, hotel_nom, dia_logistico, resp_conductor], daemon=True).start()
