@@ -4,7 +4,7 @@
 # GESTIÓN FINANCIERA (LAVAARTE + CARLOS) + FIRMAS DIGITALES DRIVE + HORA BOGOTÁ
 # EDICIÓN EN DESTINO + CIERRE DEFINITIVO ANTI-DOBLE FIRMA + DÍA CORRIDO AUTOMÁTICO
 # SERVIDOR WEB FLASK EMBEBIDO ANTI-SUSPENSIÓN (RENDER 24/7)
-# CONTROL ESTRICTO ANTI-DUPLICADOS (CERO DUPLICACIÓN EN MATRICES)
+# CONTROL ESTRICTO ANTI-DUPLICADOS + ARCHIVADO DE SOPORTE FOTOS (NORTE / ORIENTE)
 # =========================================================================
 
 import telebot
@@ -39,11 +39,11 @@ URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe
 bot = telebot.TeleBot(TOKEN, threaded=True)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# MODELOS 100% FLASH VIGENTES - SIN MODELOS PRO NI OBSOLETOS
+# MODELOS 100% FLASH VIGENTES - CERO MODELOS PRO, MÁXIMA VELOCIDAD Y DISPONIBILIDAD
 MODELOS_ROTACION = [
     'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
-    'gemini-3.5-flash-lite'
+    'gemini-3.5-flash-lite',
+    'gemini-2.5-flash-lite'
 ]
 
 sesiones = {}
@@ -86,7 +86,7 @@ def calcular_dia_corrido_logistica():
     return dia_logistico.day
 
 def ejecutar_post_apps_script(url, payload, timeout=85):
-    """Ejecución protegida contra duplicados y tolerante a redirecciones de Apps Script."""
+    """Ejecución tolerante a redirecciones de Apps Script y anti-duplicados."""
     try:
         session = requests.Session()
         resp = session.post(
@@ -98,14 +98,12 @@ def ejecutar_post_apps_script(url, payload, timeout=85):
         )
         txt = resp.text.strip()
         
-        # 1. Intento directo de parseo JSON
         if txt.startswith('{') or txt.startswith('['):
             try:
                 return json.loads(txt)
             except Exception:
                 pass
                 
-        # 2. Extracción de bloque JSON si viene embebido en HTML
         match_json = re.search(r'(\{.*\}|\[.*\])', txt, re.DOTALL)
         if match_json:
             try:
@@ -113,13 +111,11 @@ def ejecutar_post_apps_script(url, payload, timeout=85):
             except Exception:
                 pass
 
-        # 3. Si Google respondió código 200 o 302 exitoso
         if resp.status_code in [200, 302]:
             return {"status": "SUCCESS", "mensaje": "Datos procesados y guardados correctamente en Google Sheets."}
             
     except requests.exceptions.Timeout:
-        # En Google Apps Script un timeout después de 80s usualmente ya escribió la celda
-        return {"status": "SUCCESS", "mensaje": "Operación enviada a Google Sheets (Tiempo de confirmación agotado, datos registrados)."}
+        return {"status": "SUCCESS", "mensaje": "Operación enviada a Google Sheets (Tiempo agotado, datos registrados)."}
     except Exception as e:
         raise ValueError(f"Error de comunicación con Google Sheets: {str(e)}")
         
@@ -394,7 +390,7 @@ def optimizar_imagen_para_ia(img_pil):
     return types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg")
 
 def llamar_gemini_rotativo(contents):
-    """Rotación de alta disponibilidad entre modelos Flash vigentes."""
+    """Rotación anti-503 entre modelos Flash vigentes de Google GenAI."""
     ultimo_error = None
     config_llamada = types.GenerateContentConfig(
         temperature=0.1
@@ -413,7 +409,7 @@ def llamar_gemini_rotativo(contents):
             except Exception as e:
                 err_str = str(e)
                 ultimo_error = e
-                # Si el modelo está saturado (503 / 429), pasar de inmediato al siguiente modelo Flash
+                # Ante 503 UNAVAILABLE, alta demanda o 429, conmutar inmediatamente al siguiente Flash
                 if any(k in err_str for k in ["503", "UNAVAILABLE", "high demand", "429", "RESOURCE_EXHAUSTED"]):
                     time.sleep(0.3)
                     break
@@ -438,6 +434,41 @@ def extraer_fecha_formato(texto):
             anio = "20" + anio
         return f"{int(dia):02d}/{int(mes):02d}/{anio}"
     return None
+
+def respaldar_lote_fotos_en_drive(imgs, hotel_nom, ruta_nom):
+    """Genera un archivo consolidado con todas las fotos del lote y lo guarda en SOPORTE."""
+    try:
+        if not imgs:
+            return
+        ahora_bog = obtener_ahora_bogota()
+        fecha_arch = ahora_bog.strftime("%Y-%m-%d")
+        hora_arch = ahora_bog.strftime("%I-%M-%p")
+        hotel_clean = re.sub(r'[^A-Za-z0-9_]', '', hotel_nom.replace(" ", "_")).upper()
+        nombre_archivo = f"{fecha_arch}_{hora_arch}_{hotel_clean}_SOPORTE.pdf"
+        
+        # Convertir ráfaga de imágenes a un único PDF en memoria
+        imgs_rgb = []
+        for im in imgs:
+            if im.mode != "RGB":
+                imgs_rgb.append(im.convert("RGB"))
+            else:
+                imgs_rgb.append(im)
+                
+        pdf_buf = io.BytesIO()
+        imgs_rgb[0].save(pdf_buf, format="PDF", save_all=True, append_images=imgs_rgb[1:])
+        pdf_b64 = base64.b64encode(pdf_buf.getvalue()).decode('utf-8')
+        
+        payload_soporte = {
+            "accion": "GUARDAR_SOPORTE_FOTOS",
+            "ruta": ruta_nom,
+            "hotel": hotel_nom,
+            "nombre_archivo": nombre_archivo,
+            "archivo_base64": pdf_b64,
+            "mime_type": "application/pdf"
+        }
+        ejecutar_post_apps_script(URL_APPS_SCRIPT, payload_soporte, timeout=50)
+    except Exception as e:
+        print(f"Aviso: Respaldo de soporte en Drive omitido o fallido: {e}")
 
 def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None):
     ahora_bog = obtener_ahora_bogota()
@@ -1170,7 +1201,7 @@ def recibir_firma_web_app(message):
     ahora_bog = obtener_ahora_bogota()
     hotel_activo = ses.get("hotel", "Hotel")
     
-    # Cerrar inmediatamente los botones de la pantalla anterior para anti-doble firma
+    # Cierre y desactivación de botones anti-doble firma
     msg_f_id = ses.get("msg_firma_id")
     if msg_f_id:
         try:
@@ -1214,6 +1245,7 @@ def recibir_firma_web_app(message):
 def _ejecutar_procesamiento_fotos_hilo(chat_id, imgs, cfg):
     ahora_bog = obtener_ahora_bogota()
     hotel_activo = cfg.get("hotel", "Hotel")
+    ruta_activa = cfg.get("ruta", "Oriente")
     
     # 1. SUBIR FOTO DE FIRMA DIGITAL
     if cfg.get("paso_custodia") == "SUBIR_FOTO_FIRMA":
@@ -1227,7 +1259,7 @@ def _ejecutar_procesamiento_fotos_hilo(chat_id, imgs, cfg):
             payload = {
                 "accion": "GUARDAR_FIRMA_ENTREGA",
                 "hotel": hotel_activo,
-                "ruta": cfg.get("ruta", "Oriente"),
+                "ruta": ruta_activa,
                 "fecha": ahora_bog.strftime("%Y-%m-%d"),
                 "hora": ahora_bog.strftime("%I-%M-%p"),
                 "firma_base64": b64_firma,
@@ -1287,7 +1319,10 @@ def _ejecutar_procesamiento_fotos_hilo(chat_id, imgs, cfg):
             bot.send_message(chat_id, "❌ Error analizando comprobante: " + str(e))
         return
 
-    # 3. PROCESAMIENTO OPERATIVO GENERAL
+    # 3. RESPALDO AUTOMÁTICO DE SOPORTE EN DRIVE (CARPETA SOPORTE EN RUTA CORRESPONDIENTE)
+    threading.Thread(target=respaldar_lote_fotos_en_drive, args=[imgs, hotel_activo, ruta_activa], daemon=True).start()
+
+    # 4. PROCESAMIENTO OPERATIVO GENERAL
     try:
         bot.send_chat_action(chat_id, 'typing')
         filas = analizar_con_ia(imgs, cfg)
@@ -1312,7 +1347,7 @@ def procesar_lote_fotos(chat_id):
             
     cfg = sesiones.get(chat_id, ARBOL_SERVICIOS["wyndham_huespedes"])
     hotel_activo = cfg.get("hotel", "Hotel")
-    bot.send_message(chat_id, f"🔍 Analizando {len(imgs)} foto(s) para *{hotel_activo}*...", parse_mode='Markdown')
+    bot.send_message(chat_id, f"🔍 Analizando {len(imgs)} foto(s) para *{hotel_activo}* (y respaldando soporte en Drive)...", parse_mode='Markdown')
     threading.Thread(target=_ejecutar_procesamiento_fotos_hilo, args=[chat_id, imgs, cfg], daemon=True).start()
 
 @bot.message_handler(content_types=['photo'])
@@ -1338,7 +1373,7 @@ def recibir_fotos(message):
         
     bot.send_chat_action(chat_id, 'typing')
     if cant == 1:
-        bot.reply_to(message, "⚡ Foto recibida. Procesando...")
+        bot.reply_to(message, "⚡ Foto recibida. Agrupando lote y procesando...")
 
 def _procesar_audio_hilo(chat_id, audio_bytes, cfg):
     try:
@@ -1542,7 +1577,7 @@ def procesar_texto_general(m):
     chat_id = m.chat.id
     texto_ingresado = m.text.strip()
     
-    # Filtro de protección contra textos residuales de botones/menús
+    # Filtro contra textos residuales de botones/menús
     if any(texto_ingresado.startswith(prefijo) for prefijo in ["📤 ENTREGA DE ROPA", "📥 RECEPCIÓN EN HOTEL", "🏨 Operación:"]):
         return
 
@@ -1811,5 +1846,5 @@ def procesar_texto_general(m):
 # =========================================================================
 threading.Thread(target=correr_web, daemon=True).start()
 
-print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Día Corrido OK / Anti-Duplicado OK / Wyndham Alineado)")
+print("🚀 Bot Maestro Lavaarte en línea (100% Flash / Día Corrido OK / Anti-Duplicado OK / Wyndham Alineado / Soporte Drive OK)")
 bot.infinity_polling(skip_pending=True)
