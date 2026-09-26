@@ -86,24 +86,39 @@ def calcular_dia_corrido_logistica():
     return dia_logistico.day
 
 def ejecutar_post_apps_script(url, payload, timeout=85):
-    """Ejecución tolerante a redirecciones de Apps Script y anti-duplicados."""
+    """Ejecución tolerante a redirecciones de Apps Script.
+    Las operaciones de escritura aceptan una respuesta HTTP 2xx/3xx aunque
+    Apps Script no entregue JSON por una redirección/intermediario.
+    Las consultas, en cambio, EXIGEN JSON para no convertir una respuesta
+    vacía/HTML en un falso "SUCCESS".
+    """
+    accion = str(payload.get("accion", "")).upper()
+    acciones_que_requieren_json = {
+        "CONSULTAR_DESPACHO",
+        "AUDITORIA_CONSULTA_UNIVERSAL",
+        "OBTENER_PRECIOS_HOTEL"
+    }
+
     try:
         session = requests.Session()
         resp = session.post(
-            url, 
-            data=json.dumps(payload), 
-            headers={'Content-Type': 'application/json'}, 
+            url,
+            data=json.dumps(payload),
+            headers={
+                'Content-Type': 'application/json',
+                'Accept': 'application/json, text/plain, */*'
+            },
             timeout=timeout,
             allow_redirects=True
         )
         txt = resp.text.strip()
-        
+
         if txt.startswith('{') or txt.startswith('['):
             try:
                 return json.loads(txt)
             except Exception:
                 pass
-                
+
         match_json = re.search(r'(\{.*\}|\[.*\])', txt, re.DOTALL)
         if match_json:
             try:
@@ -111,23 +126,199 @@ def ejecutar_post_apps_script(url, payload, timeout=85):
             except Exception:
                 pass
 
-        if resp.status_code in [200, 302]:
-            return {"status": "SUCCESS", "mensaje": "Datos procesados y guardados correctamente en Google Sheets."}
-            
+        if accion in acciones_que_requieren_json:
+            raise ValueError(
+                "Google Sheets respondió sin datos JSON para la consulta."
+            )
+
+        if 200 <= resp.status_code < 400:
+            return {
+                "status": "SUCCESS",
+                "respuesta_ambigua": True,
+                "mensaje": "Operación recibida y procesada por Google Sheets."
+            }
+
+        raise ValueError(
+            f"Google Sheets respondió con código HTTP {resp.status_code}."
+        )
+
     except requests.exceptions.Timeout:
-        return {"status": "SUCCESS", "mensaje": "Operación enviada a Google Sheets (Tiempo agotado, datos registrados)."}
+        if accion not in acciones_que_requieren_json:
+            return {
+                "status": "SUCCESS",
+                "respuesta_ambigua": True,
+                "mensaje": "Operación enviada a Google Sheets y puede haber quedado registrada."
+            }
+        raise ValueError("Tiempo de espera agotado consultando Google Sheets.")
+
+    except ValueError:
+        raise
+
     except Exception as e:
         raise ValueError(f"Error de comunicación con Google Sheets: {str(e)}")
-        
-    raise ValueError("El servidor de Google Sheets no devolvió una respuesta válida.")
+
+
+# -------------------------------------------------------------------------
+# PRECIOS OFICIALES HAMPTON / HILTON
+# -------------------------------------------------------------------------
+PRECIOS_HOTEL_CACHE = {}
+PRECIOS_HOTEL_KEYS = {
+    "hampton": "HUESPEDES",
+    "hampton_empleados": "EMPLEADOS",
+    "hilton": "HUESPEDES",
+    "hilton_empleados": "EMPLEADOS"
+}
+
+def _clave_precio_hotel(config_sesion):
+    key = str(config_sesion.get("key", "")).lower()
+    if key in PRECIOS_HOTEL_KEYS:
+        return key, PRECIOS_HOTEL_KEYS[key]
+    hotel = limpiar_texto_simple(config_sesion.get("hotel", ""))
+    if "hampton" in hotel:
+        return "hampton", str(config_sesion.get("tipo_precio", "HUESPEDES")).upper()
+    if "hilton" in hotel:
+        return "hilton", str(config_sesion.get("tipo_precio", "HUESPEDES")).upper()
+    return None, None
+
+def obtener_precios_oficiales_hotel(config_sesion):
+    key, tipo_precio = _clave_precio_hotel(config_sesion)
+    if not key:
+        return []
+
+    cache_key = f"{key}_{tipo_precio}"
+    if cache_key in PRECIOS_HOTEL_CACHE and PRECIOS_HOTEL_CACHE[cache_key]:
+        return PRECIOS_HOTEL_CACHE[cache_key]
+
+    hotel = config_sesion.get("hotel", "")
+    payload = {
+        "accion": "OBTENER_PRECIOS_HOTEL",
+        "hotel": hotel,
+        "tipo_precio": tipo_precio
+    }
+
+    ultimo_error = None
+    for intento in range(2):
+        try:
+            resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=25)
+            if resp.get("status") == "SUCCESS" and isinstance(resp.get("precios"), list) and resp.get("precios"):
+                PRECIOS_HOTEL_CACHE[cache_key] = resp["precios"]
+                return resp["precios"]
+            ultimo_error = ValueError(resp.get("mensaje", "No se recibió la lista oficial de precios."))
+        except Exception as e:
+            ultimo_error = e
+            time.sleep(0.4)
+
+    # Si ya hubo una lectura exitosa anteriormente, se conserva como respaldo
+    # ante una caída temporal de la consulta.
+    if cache_key in PRECIOS_HOTEL_CACHE and PRECIOS_HOTEL_CACHE[cache_key]:
+        return PRECIOS_HOTEL_CACHE[cache_key]
+
+    raise ValueError(
+        f"No se pudo validar la lista oficial de precios de {hotel} ({tipo_precio}). "
+        "No se utilizarán precios inventados por la IA."
+    ) from ultimo_error
+
+def _normalizar_clave_precio(txt):
+    if not txt:
+        return ""
+    s = limpiar_texto_simple(txt)
+    # Variaciones muy comunes que no cambian la prenda.
+    s = s.replace("tshirt", "camiseta")
+    s = s.replace("dressshirt", "camisa")
+    s = s.replace("tennisshoes", "zapatos")
+    s = s.replace("tenisshoes", "zapatos")
+    return s
+
+def _buscar_precio_oficial(nombre_prenda, precios):
+    objetivo = _normalizar_clave_precio(nombre_prenda)
+    if not objetivo:
+        return None
+
+    candidatos = []
+    for item in precios:
+        nombre = str(item.get("prenda", "")).strip()
+        clave = _normalizar_clave_precio(nombre)
+        if not clave:
+            continue
+
+        if objetivo == clave:
+            return item
+
+        # Acepta "Pantalón/Pants" vs "Pantalón", "Abrigo/Coat" vs "Abrigo",
+        # etc., pero solamente cuando el resultado es único.
+        if objetivo in clave or clave in objetivo:
+            candidatos.append(item)
+
+    if len(candidatos) == 1:
+        return candidatos[0]
+
+    # Último nivel: coincidencia por palabras significativas y única.
+    palabras_obj = set(
+        p for p in re.findall(r"[a-z0-9]+", objetivo)
+        if len(p) >= 4
+    )
+    if palabras_obj:
+        candidatos_tokens = []
+        for item in precios:
+            clave = _normalizar_clave_precio(item.get("prenda", ""))
+            palabras = set(
+                p for p in re.findall(r"[a-z0-9]+", clave)
+                if len(p) >= 4
+            )
+            if palabras_obj and len(palabras_obj.intersection(palabras)) >= max(1, min(2, len(palabras_obj))):
+                candidatos_tokens.append(item)
+        if len(candidatos_tokens) == 1:
+            return candidatos_tokens[0]
+
+    return None
+
+def aplicar_precios_oficiales_hotel(filas, config_sesion, precios_oficiales):
+    """Reemplaza cualquier precio generado por IA por el precio oficial.
+    Si una prenda no existe en la lista oficial, se detiene para no guardar
+    un valor incorrecto.
+    """
+    errores = []
+
+    for f in filas:
+        item = _buscar_precio_oficial(f.get("prenda", ""), precios_oficiales)
+        if not item:
+            errores.append(str(f.get("prenda", "Prenda sin nombre")))
+            continue
+
+        cantidad = a_entero(f.get("cantidad", 1))
+        precio = float(item.get("precio", 0) or 0)
+
+        f["prenda"] = str(item.get("prenda", f.get("prenda", "")))
+        f["valorUnitario"] = precio
+        f["valorTotal"] = cantidad * precio
+
+        if item.get("codigo") not in (None, "", "0"):
+            try:
+                f["codigo"] = int(float(item.get("codigo")))
+            except Exception:
+                f["codigo"] = item.get("codigo")
+
+        f["precio_fuente"] = "LISTA OFICIAL DE PRECIOS"
+        f["tipo_precio"] = config_sesion.get("tipo_precio", "HUESPEDES")
+
+    if errores:
+        raise ValueError(
+            "No se pudo homologar exactamente a la lista oficial de precios: "
+            + ", ".join(errores)
+            + ". No se guardaron precios inventados."
+        )
+
+    return filas
 
 ARBOL_SERVICIOS = {
     # RUTA ORIENTE
     "wyndham_huespedes": {"ruta": "Oriente", "hotel": "Wyndham", "servicio": "Huéspedes", "hoja": "WYNDHAM_HUESPEDES_DATOS", "tipo": "HUESPEDES", "base_defecto": "WYNDHAM HUÉSPEDES"},
     "wyndham_lenceria": {"ruta": "Oriente", "hotel": "Wyndham Lencería", "servicio": "Lencería", "hoja": "WYNDHAM_LENCERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "WYNDHAM LENCERÍA"},
     "wyndham_manteleria": {"ruta": "Oriente", "hotel": "Wyndham Mantelería", "servicio": "Mantelería", "hoja": "WYNDHAM_MANTELERIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "WYNDHAM MANTELERÍA"},
-    "hilton": {"ruta": "Oriente", "hotel": "Hilton", "servicio": "General", "hoja": "HILTON_DATOS", "tipo": "HUESPEDES", "base_defecto": "HILTON HUÉSPEDES"},
-    "hampton": {"ruta": "Oriente", "hotel": "Hampton", "servicio": "General", "hoja": "HAMPTON_DATOS", "tipo": "HUESPEDES", "base_defecto": "HAMPTON HUÉSPEDES"},
+    "hilton": {"ruta": "Oriente", "hotel": "Hilton", "servicio": "General", "hoja": "HILTON_DATOS", "tipo": "HUESPEDES", "base_defecto": "HILTON HUÉSPEDES", "tipo_precio": "HUESPEDES"},
+    "hilton_empleados": {"ruta": "Oriente", "hotel": "Hilton", "servicio": "Empleados", "hoja": "HILTON_DATOS", "tipo": "HUESPEDES", "base_defecto": "HILTON EMPLEADOS", "tipo_precio": "EMPLEADOS"},
+    "hampton": {"ruta": "Oriente", "hotel": "Hampton", "servicio": "General", "hoja": "HAMPTON_DATOS", "tipo": "HUESPEDES", "base_defecto": "HAMPTON HUÉSPEDES", "tipo_precio": "HUESPEDES"},
+    "hampton_empleados": {"ruta": "Oriente", "hotel": "Hampton", "servicio": "Empleados", "hoja": "HAMPTON_DATOS", "tipo": "HUESPEDES", "base_defecto": "HAMPTON EMPLEADOS", "tipo_precio": "EMPLEADOS"},
     "oceania": {"ruta": "Oriente", "hotel": "Oceania", "servicio": "Lencería", "hoja": "OCEANIA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "OCEANIA LENCERÍA"},
     "fontana": {"ruta": "Oriente", "hotel": "Fontana", "servicio": "Lencería", "hoja": "FONTANA_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "FONTANA LENCERÍA"},
     "almacen": {"ruta": "Mostrador", "hotel": "Almacén Central", "servicio": "Control", "hoja": "ALMACEN_DATOS", "tipo": "LENCERIA_MATRIZ", "base_defecto": "ALMACÉN"},
@@ -496,6 +687,13 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     es_manteleria = ("manteleria" in key or "manteleria" in servicio.lower())
     es_lenceria = es_servicio_lista_limpia(config_sesion)
     es_eficacia = (key == "eficacia")
+    es_hampton_hilton = ("hampton" in limpiar_texto_simple(hotel) or "hilton" in limpiar_texto_simple(hotel))
+    precios_oficiales = []
+
+    # Hampton / Hilton: la IA solo clasifica la prenda. El precio SIEMPRE
+    # sale de la hoja oficial de precios de Google Sheets.
+    if es_hampton_hilton:
+        precios_oficiales = obtener_precios_oficiales_hotel(config_sesion)
 
     # 1. PROMPT EFICACIA DOTACIONES
     if es_eficacia:
@@ -558,13 +756,22 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
         REGLAS ESTRICTAS Y AISLADAS POR HOTEL:
         1. REGLA BÓXER: 'boxer', 'bóxer' es SIEMPRE 'Calzoncillo/Undershort' (Código 11).
         2. REGLA SIN REMISIÓN EN HILTON Y WYNDHAM: En '{hotel}' el campo remision debe quedar vacío ("").
-        3. Clasifica la prenda en el Catálogo y calcula los totales.
-        
-        CATÁLOGO GLOBAL:
+        3. Clasifica cada prenda con máxima precisión.
+        4. NUNCA inventes ni reutilices precios de memoria. Para Hampton y Hilton,
+           el precio oficial será colocado posteriormente por el sistema desde la
+           hoja PRECIOS de Google Sheets.
+
+        CATÁLOGO GLOBAL DE APOYO:
         {CATALOGO_GLOBAL}
-        
+
+        {(
+            "CATÁLOGO OFICIAL DE PRENDAS PARA ESTE HOTEL / TIPO DE PRECIO:\n" +
+            "\n".join("- " + str(x.get("prenda", "")) for x in precios_oficiales) +
+            "\nUsa exactamente el nombre oficial más cercano de esta lista. No inventes prendas."
+        ) if es_hampton_hilton else ""}
+
         {f"AJUSTE DEL USUARIO: {correccion_usuario}" if correccion_usuario else ""}
-        
+
         Devuelve EXCLUSIVAMENTE un JSON válido:
         [
           {{
@@ -634,6 +841,14 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
                         f["servicio"] = "Lavado"
                         f["valorUnitario"] = 1700
                         f["valorTotal"] = a_entero(f.get("cantidad", 1)) * 1700
+
+    # FUENTE ÚNICA DE PRECIOS: Hampton / Hilton
+    if es_hampton_hilton and isinstance(filas, list):
+        aplicar_precios_oficiales_hotel(
+            filas,
+            config_sesion,
+            precios_oficiales
+        )
 
     # Consolidación de filas en Eficacia Dotaciones
     if es_eficacia and isinstance(filas, list):
@@ -828,7 +1043,9 @@ def menu_hoteles_oriente():
         InlineKeyboardButton("🛏️ Wyndham Lencería", callback_data="sel_wyndham_lenceria"),
         InlineKeyboardButton("🍽️ Wyndham Mantelería", callback_data="sel_wyndham_manteleria"),
         InlineKeyboardButton("🏨 Hotel Hilton", callback_data="sel_hilton"),
+        InlineKeyboardButton("👤 Hilton Empleados", callback_data="sel_hilton_empleados"),
         InlineKeyboardButton("🏨 Hotel Hampton", callback_data="sel_hampton"),
+        InlineKeyboardButton("👤 Hampton Empleados", callback_data="sel_hampton_empleados"),
         InlineKeyboardButton("🏨 Hotel Oceania", callback_data="sel_oceania"),
         InlineKeyboardButton("🏨 Hotel Fontana", callback_data="sel_fontana"),
         InlineKeyboardButton("📦 Almacén Central", callback_data="sel_almacen"),
@@ -1109,26 +1326,70 @@ def iniciar_confirmacion_hotel(call):
     )
 
 def _consultar_despacho_async(chat_id, cfg, hotel_nom, dia_logistico, resp_conductor):
-    try:
-        payload = {
-            "accion": "CONSULTAR_DESPACHO",
-            "ruta": cfg.get("ruta", "Oriente"),
-            "hotel": hotel_nom,
-            "destino": cfg.get("hoja", ""),
-            "dia": dia_logistico
-        }
-        resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=35)
-        
-        if resp.get("status") == "SUCCESS":
-            desp = resp.get("despacho", {})
-            desp["despachado_por"] = resp_conductor
-            sesiones[chat_id]["despacho_pendiente"] = desp
-            txt_info = armar_texto_despacho(desp, hotel_nom, cfg.get("servicio", "Lencería"), resp_conductor)
-            bot.send_message(chat_id, txt_info, reply_markup=menu_confirmacion_despacho_en_sitio(), parse_mode='Markdown')
-        else:
-            bot.send_message(chat_id, f"⚠️ No se encontró un despacho activo registrado de planta para el día {dia_logistico} en *{hotel_nom}*.\nVerifica si en planta ya fue cargado el despacho.", parse_mode='Markdown')
-    except Exception as e:
-        bot.send_message(chat_id, "❌ Error consultando despacho: " + str(e))
+    """Busca el último despacho activo real, no solamente el día hábil anterior.
+    Reintenta automáticamente ante una respuesta temporalmente inválida.
+    """
+    ultimo_error = None
+
+    for intento in range(3):
+        try:
+            payload = {
+                "accion": "CONSULTAR_DESPACHO",
+                "ruta": cfg.get("ruta", "Oriente"),
+                "hotel": hotel_nom,
+                "destino": cfg.get("hoja", ""),
+                "dia": dia_logistico,
+                "usar_ultimo_despacho": True
+            }
+            resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=35)
+
+            if resp.get("status") == "SUCCESS" and isinstance(resp.get("despacho"), dict):
+                desp = resp.get("despacho", {})
+                if not desp.get("fecha") or desp.get("total_prendas") is None:
+                    raise ValueError("El despacho devuelto no contiene datos completos.")
+
+                desp["despachado_por"] = resp_conductor
+                sesiones[chat_id]["despacho_pendiente"] = desp
+                sesiones[chat_id]["dia_despacho_corrido"] = dia_logistico
+
+                txt_info = armar_texto_despacho(
+                    desp,
+                    hotel_nom,
+                    cfg.get("servicio", "Lencería"),
+                    resp_conductor
+                )
+                bot.send_message(
+                    chat_id,
+                    txt_info,
+                    reply_markup=menu_confirmacion_despacho_en_sitio(),
+                    parse_mode='Markdown'
+                )
+                return
+
+            if resp.get("status") == "EMPTY":
+                bot.send_message(
+                    chat_id,
+                    f"⚠️ No se encontró un despacho activo registrado de planta para *{hotel_nom}*.\n"
+                    "El sistema revisó el último despacho pendiente, sin limitarse al día hábil anterior.",
+                    parse_mode='Markdown'
+                )
+                return
+
+            ultimo_error = ValueError(resp.get("mensaje", "Respuesta incompleta de Google Sheets."))
+
+        except Exception as e:
+            ultimo_error = e
+            if intento < 2:
+                time.sleep(1.2)
+
+    sesiones[chat_id]["paso_custodia"] = "REINTENTAR_CONSULTA_DESPACHO"
+    sesiones[chat_id]["despacho_pendiente"] = None
+    bot.send_message(
+        chat_id,
+        "🔄 No pude leer temporalmente el despacho. La información de planta no se ha modificado.\n"
+        "Escribe *REINTENTAR* para volver a consultarlo.",
+        parse_mode='Markdown'
+    )
 
 @bot.callback_query_handler(func=lambda call: call.data in ['despacho_ok_proceder', 'despacho_modificar_en_sitio'])
 def manejar_decision_entrega_sitio(call):
@@ -1522,11 +1783,12 @@ def confirmar_guardado(m):
                 "id_transaccion": token_transaccion
             }
             
-            sesiones[chat_id]["filas"] = []
-            
             data_resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=90)
             
             if data_resp.get("status") == "SUCCESS":
+                # Solo limpiamos la sesión después de confirmar que la escritura
+                # fue aceptada. Así una respuesta ambigua no rompe el ciclo.
+                sesiones[chat_id]["filas"] = []
                 hoja_dest = data_resp.get("hoja_guardada", cfg['hotel'])
                 bot.reply_to(m, f"✅ *¡Datos guardados con éxito!*\n📋 Registrado en: `{hoja_dest}`\n📅 Columna del día: *{dia_actual}*\n⏱️ Hora sellada: *{hora_bogota}*", parse_mode='Markdown')
                 bot.send_message(chat_id, "¿Qué deseas hacer a continuación?", reply_markup=menu_post_guardado())
@@ -1733,6 +1995,22 @@ def procesar_texto_general(m):
         return
 
     # 4. PASOS DE CUSTODIA Y FLUJOS DE ENTREGA/RECEPCIÓN
+    if paso == "REINTENTAR_CONSULTA_DESPACHO":
+        resp_conductor = ses.get("resp_lavaarte", "Conductor Lavaarte")
+        dia_logistico = calcular_dia_corrido_logistica()
+        ses["paso_custodia"] = "CONSULTANDO_DESPACHO"
+        bot.reply_to(
+            m,
+            f"🔎 Volviendo a consultar el último despacho activo de *{hotel_nom}*...",
+            parse_mode='Markdown'
+        )
+        threading.Thread(
+            target=_consultar_despacho_async,
+            args=[chat_id, ses, hotel_nom, dia_logistico, resp_conductor],
+            daemon=True
+        ).start()
+        return
+
     if paso == "RESP_LAVAARTE_DESPACHO":
         ses["resp_lavaarte"] = texto_ingresado
         ses["resp_hotel"] = "Por entregar en hotel"
