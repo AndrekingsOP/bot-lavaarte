@@ -39,39 +39,117 @@ URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe
 bot = telebot.TeleBot(TOKEN, threaded=True)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# MODELOS VIGENTES OFICIALES (MÁXIMA VELOCIDAD Y RESPALDO AUTOMÁTICO)
+# =========================================================================
+# ROTACIÓN DE MODELOS GEMINI
+# Sistema de respaldo automático para texto + imágenes + audio
+# =========================================================================
+
 MODELOS_ROTACION = [
-    'gemini-2.5-flash',
-    'gemini-3.5-flash-lite'
+    # Principal
+    "gemini-3.8-flash",
+
+    # Respaldos principales
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+
+    # Respaldos ligeros / alto volumen
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+
+    # Último respaldo
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
 ]
 
+
 def llamar_gemini_rotativo(contents):
-    """Rotación ultrarrápida entre modelos Flash vigentes con reintento inmediato ante alta demanda."""
+    """
+    Ejecuta Gemini con rotación automática.
+
+    Si un modelo devuelve:
+        429
+        503
+        404
+        403
+        RESOURCE_EXHAUSTED
+        UNAVAILABLE
+        NOT_FOUND
+
+    pasa automáticamente al siguiente modelo.
+
+    Funciona con el mismo 'contents' para:
+        - texto
+        - imágenes
+        - audio
+        - combinaciones de los anteriores
+    """
+
     ultimo_error = None
+
     config_llamada = types.GenerateContentConfig(
         temperature=0.1
     )
 
     for modelo in MODELOS_ROTACION:
+
         try:
+            print(f"[GEMINI] Intentando modelo: {modelo}")
+
             resp = client.models.generate_content(
-                model=modelo, 
-                contents=contents, 
+                model=modelo,
+                contents=contents,
                 config=config_llamada
             )
+
             if resp and resp.text:
+                print(f"[GEMINI] OK -> {modelo}")
                 return resp.text
+
+            print(f"[GEMINI] {modelo} respondió sin texto")
+
         except Exception as e:
-            err_str = str(e)
+
+            err_str = str(e).upper()
             ultimo_error = e
-            # Si un modelo está bajo alta demanda (503/429), pasa de inmediato al siguiente sin bloquearte
-            if any(k in err_str for k in ["503", "UNAVAILABLE", "high demand", "429", "RESOURCE_EXHAUSTED", "404", "NOT_FOUND"]):
-                time.sleep(0.2)
+
+            print(f"[GEMINI] ERROR en {modelo}: {e}")
+
+            # Errores que justifican cambiar inmediatamente de modelo
+            errores_rotacion = [
+                "429",
+                "503",
+                "403",
+                "404",
+                "RESOURCE_EXHAUSTED",
+                "UNAVAILABLE",
+                "NOT_FOUND",
+                "HIGH DEMAND",
+                "RATE LIMIT",
+                "QUOTA"
+            ]
+
+            if any(error in err_str for error in errores_rotacion):
+
+                print(
+                    f"[GEMINI] {modelo} no disponible. "
+                    f"Pasando al siguiente modelo..."
+                )
+
+                # Pausa mínima para no bombardear la API
+                time.sleep(0.3)
+
                 continue
-            else:
-                raise e
-                
-    raise ultimo_error
+
+            # Si es un error que NO parece temporal,
+            # lo conservamos como error real.
+            raise
+
+    # Ningún modelo funcionó
+    raise Exception(
+        f"Todos los modelos Gemini de respaldo fallaron. "
+        f"Último error: {ultimo_error}"
+    )
 sesiones = {}
 cola_fotos = {}
 timers = {}
