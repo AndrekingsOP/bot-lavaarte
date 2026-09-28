@@ -39,12 +39,39 @@ URL_APPS_SCRIPT_CARLOS = 'https://script.google.com/macros/s/AKfycbwv-D7RZLLaxVe
 bot = telebot.TeleBot(TOKEN, threaded=True)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# MODELOS 100% FLASH VIGENTES - CERO MODELOS PRO, MÁXIMA VELOCIDAD Y DISPONIBILIDAD
+# MODELOS VIGENTES OFICIALES (MÁXIMA VELOCIDAD Y RESPALDO AUTOMÁTICO)
 MODELOS_ROTACION = [
     'gemini-2.5-flash',
     'gemini-3.5-flash-lite'
 ]
 
+def llamar_gemini_rotativo(contents):
+    """Rotación ultrarrápida entre modelos Flash vigentes con reintento inmediato ante alta demanda."""
+    ultimo_error = None
+    config_llamada = types.GenerateContentConfig(
+        temperature=0.1
+    )
+
+    for modelo in MODELOS_ROTACION:
+        try:
+            resp = client.models.generate_content(
+                model=modelo, 
+                contents=contents, 
+                config=config_llamada
+            )
+            if resp and resp.text:
+                return resp.text
+        except Exception as e:
+            err_str = str(e)
+            ultimo_error = e
+            # Si un modelo está bajo alta demanda (503/429), pasa de inmediato al siguiente sin bloquearte
+            if any(k in err_str for k in ["503", "UNAVAILABLE", "high demand", "429", "RESOURCE_EXHAUSTED", "404", "NOT_FOUND"]):
+                time.sleep(0.2)
+                continue
+            else:
+                raise e
+                
+    raise ultimo_error
 sesiones = {}
 cola_fotos = {}
 timers = {}
