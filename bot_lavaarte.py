@@ -42,8 +42,7 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 # MODELOS 100% FLASH VIGENTES - CERO MODELOS PRO, MÁXIMA VELOCIDAD Y DISPONIBILIDAD
 MODELOS_ROTACION = [
     'gemini-2.5-flash',
-    'gemini-3.5-flash-lite',
-    'gemini-2.5-flash-lite'
+    'gemini-3.5-flash-lite'
 ]
 
 sesiones = {}
