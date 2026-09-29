@@ -322,40 +322,192 @@ def obtener_precios_oficiales_hotel(config_sesion):
     ) from ultimo_error
 
 def _normalizar_clave_precio(txt):
+    """
+    Normaliza un nombre de prenda para compararlo contra Google Sheets.
+    NO modifica el nombre que se guarda; solamente crea una clave de búsqueda.
+    """
     if not txt:
         return ""
+
     s = limpiar_texto_simple(txt)
-    # Variaciones muy comunes que no cambian la prenda.
-    s = s.replace("tshirt", "camiseta")
-    s = s.replace("dressshirt", "camisa")
-    s = s.replace("tennisshoes", "zapatos")
-    s = s.replace("tenisshoes", "zapatos")
+
+    # Unifica escritura inglesa/española muy habitual.
+    s = s.replace("t shirt", "tshirt")
+    s = s.replace("dress shirt", "dressshirt")
+    s = s.replace("tennis shoes", "tennisshoes")
+    s = s.replace("tenis shoes", "tennisshoes")
+    s = s.replace("tenis", "tennis")
+
+    # Quitar espacios alrededor de separadores para que las variantes
+    # "Interiores/ Panties" y "Interiores/Panties" coincidan.
+    s = re.sub(r"\s*/\s*", "/", s)
+    s = re.sub(r"\s*-\s*", "-", s)
+    s = re.sub(r"\s+", " ", s).strip()
+
     return s
 
+
+def _clave_prenda_hotel_alias(nombre_prenda):
+    """
+    Convierte las formas habituales que aparecen escritas en planillas
+    (y las que puede devolver Gemini) a una clave conceptual estable.
+
+    Esta función es deliberadamente independiente de los precios: el precio
+    SIEMPRE se obtiene después de la lista oficial de Google Sheets.
+    """
+    n = _normalizar_clave_precio(nombre_prenda)
+    if not n:
+        return ""
+
+    # ROPA INTERIOR: las tres expresiones representan la misma familia.
+    if any(x in n for x in [
+        "boxer", "bóxer", "interior", "interiores",
+        "panty", "panties", "calzoncillo", "undershort", "underwear"
+    ]):
+        return "__ROPA_INTERIOR__"
+
+    # BERMUDA = PANTALONETA / SHORT, según la regla histórica del bot.
+    if n in ["bermuda", "pantaloneta", "short"] or "bermuda " in n:
+        # Si explícitamente dice "bermuda de vestir", se conserva esa
+        # distinción porque existe como artículo propio en la lista oficial.
+        if "bermuda de vestir" in n:
+            return "bermuda de vestir"
+        return "__PANTALONETA__"
+
+    # Prendas que Gemini suele devolver con traducciones o nombres genéricos.
+    if n in ["camisa", "camisa/dressshirt", "dressshirt"] or "dress shirt" in n:
+        return "__CAMISA__"
+
+    if n in ["camiseta", "tshirt", "camiseta/tshirt", "t-shirt", "tshirt/camiseta"]:
+        return "__CAMISETA_TSHIRT__"
+
+    if "camiseta sport" in n or n == "sport camiseta":
+        return "__CAMISETA_SPORT__"
+
+    if n in ["pantalon", "pantalones", "pantalon/pants", "pants"]:
+        return "__PANTALON__"
+
+    if n in ["jean", "jeans", "blue jeans"]:
+        return "__JEANS__"
+
+    if n in ["calcetines", "calcetin", "medias", "media", "socks", "sock", "calcetines/socks"]:
+        return "__CALCETINES__"
+
+    if n in ["sueter", "sweter", "sweater", "sueter/sweter"]:
+        return "__SUETER__"
+
+    return n
+
+
+def _buscar_por_clave_con_preferencia(precios, claves_preferidas):
+    """Busca el primer nombre oficial disponible entre varias alternativas."""
+    for clave_objetivo in claves_preferidas:
+        for item in precios:
+            clave = _normalizar_clave_precio(item.get("prenda", ""))
+            if clave == clave_objetivo:
+                return item
+    return None
+
+
 def _buscar_precio_oficial(nombre_prenda, precios):
+    """
+    Busca EXCLUSIVAMENTE una prenda existente en la lista oficial recibida
+    desde Google Sheets. Antes de comparar aplica las equivalencias del bot.
+
+    Importante: nunca devuelve un precio inventado por IA.
+    """
     objetivo = _normalizar_clave_precio(nombre_prenda)
-    if not objetivo:
+    if not objetivo or not precios:
         return None
 
-    candidatos = []
+    # 1. Coincidencia exacta: tiene prioridad absoluta.
     for item in precios:
-        nombre = str(item.get("prenda", "")).strip()
-        clave = _normalizar_clave_precio(nombre)
-        if not clave:
-            continue
-
-        if objetivo == clave:
+        clave = _normalizar_clave_precio(item.get("prenda", ""))
+        if clave and objetivo == clave:
             return item
 
-        # Acepta "Pantalón/Pants" vs "Pantalón", "Abrigo/Coat" vs "Abrigo",
-        # etc., pero solamente cuando el resultado es único.
+    # 2. Equivalencias controladas.
+    alias = _clave_prenda_hotel_alias(nombre_prenda)
+
+    if alias == "__ROPA_INTERIOR__":
+        # Para Hilton/Hampton, boxer/interior/panty son la misma familia.
+        # Preferimos el nombre "Interiores/ Panties" si existe; si no,
+        # usamos "Calzoncillo/Undershort". Ambos siguen viniendo de Sheets.
+        item = _buscar_por_clave_con_preferencia(
+            precios,
+            ["interiores/panties", "calzoncillo/undershort"]
+        )
+        if item:
+            return item
+
+    elif alias == "__PANTALONETA__":
+        item = _buscar_por_clave_con_preferencia(
+            precios,
+            ["pantaloneta/short", "bermuda de vestir"]
+        )
+        if item:
+            return item
+
+    elif alias == "__CAMISA__":
+        item = _buscar_por_clave_con_preferencia(
+            precios,
+            ["camisa/dressshirt", "camisa/blouse", "blusa/camisa"]
+        )
+        if item:
+            return item
+
+    elif alias == "__CAMISETA_SPORT__":
+        item = _buscar_por_clave_con_preferencia(
+            precios,
+            ["camiseta sport", "camiseta/tshirt"]
+        )
+        if item:
+            return item
+
+    elif alias == "__CAMISETA_TSHIRT__":
+        item = _buscar_por_clave_con_preferencia(
+            precios,
+            ["camiseta/tshirt", "camiseta sport"]
+        )
+        if item:
+            return item
+
+    elif alias == "__PANTALON__":
+        item = _buscar_por_clave_con_preferencia(
+            precios,
+            ["pantalon/pants"]
+        )
+        if item:
+            return item
+
+    elif alias == "__JEANS__":
+        item = _buscar_por_clave_con_preferencia(precios, ["jeans"])
+        if item:
+            return item
+
+    elif alias == "__CALCETINES__":
+        item = _buscar_por_clave_con_preferencia(precios, ["calcetines/socks"])
+        if item:
+            return item
+
+    elif alias == "__SUETER__":
+        item = _buscar_por_clave_con_preferencia(precios, ["sueter/sweter"] )
+        if item:
+            return item
+
+    # 3. Coincidencia contenida SOLO cuando es inequívoca.
+    candidatos = []
+    for item in precios:
+        clave = _normalizar_clave_precio(item.get("prenda", ""))
+        if not clave:
+            continue
         if objetivo in clave or clave in objetivo:
             candidatos.append(item)
 
     if len(candidatos) == 1:
         return candidatos[0]
 
-    # Último nivel: coincidencia por palabras significativas y única.
+    # 4. Coincidencia por palabras significativas, también única.
     palabras_obj = set(
         p for p in re.findall(r"[a-z0-9]+", objetivo)
         if len(p) >= 4
@@ -368,7 +520,7 @@ def _buscar_precio_oficial(nombre_prenda, precios):
                 p for p in re.findall(r"[a-z0-9]+", clave)
                 if len(p) >= 4
             )
-            if palabras_obj and len(palabras_obj.intersection(palabras)) >= max(1, min(2, len(palabras_obj))):
+            if len(palabras_obj.intersection(palabras)) >= max(1, min(2, len(palabras_obj))):
                 candidatos_tokens.append(item)
         if len(candidatos_tokens) == 1:
             return candidatos_tokens[0]
@@ -857,9 +1009,18 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
         Operación activa: Hotel '{hotel}', Servicio '{servicio}', Clave: '{key}'.
         
         REGLAS ESTRICTAS Y AISLADAS POR HOTEL:
-        1. REGLA BÓXER: 'boxer', 'bóxer' es SIEMPRE 'Calzoncillo/Undershort' (Código 11).
+        1. REGLAS DE HOMOLOGACIÓN DE PRENDAS: conserva el significado exacto de lo escrito.
+           - 'boxer', 'bóxer', 'interior', 'interiores', 'panty' y 'panties' representan ROPA INTERIOR.
+           - 'bermuda', 'pantaloneta' y 'short' representan PANTALONETA/SHORT.
+           - 'camisa' representa CAMISA/DRESS SHIRT.
+           - 'camiseta' representa CAMISETA/T SHIRT, salvo que diga explícitamente 'sport'.
+           - 'jeans' representa JEANS.
+           - 'pantalón'/'pantalon' representa PANTALÓN/PANTS.
+           - 'medias'/'media'/'calcetines' representan CALCETINES/SOCKS.
+           - 'suéter'/'sueter' representa SUÉTER/SWETER.
+           Estas equivalencias son de clasificación; el nombre y precio finales se toman de la lista oficial de Google Sheets.
         2. REGLA SIN REMISIÓN EN HILTON Y WYNDHAM: En '{hotel}' el campo remision debe quedar vacío ("").
-        3. Clasifica cada prenda con máxima precisión.
+        3. Clasifica cada prenda con máxima precisión. NO conviertas una prenda en otra solo porque el nombre inglés sea parecido.
         4. NUNCA inventes ni reutilices precios de memoria. Para Hampton y Hilton,
            el precio oficial será colocado posteriormente por el sistema desde la
            hoja PRECIOS de Google Sheets.
