@@ -421,6 +421,8 @@ def _normalizar_clave_precio(txt):
         return ""
 
     s = limpiar_texto_simple(txt)
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
 
     # Separadores y variantes de escritura.
     s = s.replace("t-shirt", "tshirt")
@@ -560,6 +562,12 @@ def _buscar_precio_oficial(nombre_prenda, precios):
         if not s:
             return ""
         s = limpiar_texto_simple(str(s))
+        # CRÍTICO: Sheets puede devolver "Pantalón", "Camiséta", etc.
+        # La comparación anterior eliminaba las letras acentuadas al pasar
+        # por [a-z0-9], provocando que TODOS los artículos en español fallaran.
+        s = unicodedata.normalize("NFKD", s)
+        s = "".join(ch for ch in s if not unicodedata.combining(ch))
+        s = s.lower()
         s = s.replace("t-shirt", "tshirt").replace("t shirt", "tshirt")
         s = s.replace("dress shirt", "dressshirt")
         s = s.replace("sweater", "sweter")
@@ -574,7 +582,7 @@ def _buscar_precio_oficial(nombre_prenda, precios):
         # Orden importante: jeans antes de pantalon para no convertir jeans en pantalon.
         if "jeans" in n or re.search(r"\bjean\b", n):
             return "jeans"
-        if any(x in n for x in ["boxer", "interior", "panty", "panties", "calzoncillo", "undershort"]):
+        if any(x in n for x in ["boxer", "interior", "panty", "panties", "calzoncillo", "undershort", "underwear"]):
             return "interiores/panties"
         if "bermuda de vestir" in n:
             return "bermuda de vestir"
@@ -588,7 +596,7 @@ def _buscar_precio_oficial(nombre_prenda, precios):
             return "camisa/dressshirt"
         if "pantalon" in n or re.search(r"\bpants\b", n):
             return "pantalon/pants"
-        if "calcetin" in n or "calcetines" in n or "media" in n or "medias" in n or "socks" in n:
+        if "calcetin" in n or "calcetines" in n or re.search(r"\bmedia\b", n) or re.search(r"\bmedias\b", n) or "socks" in n:
             return "calcetines/socks"
         if "sueter" in n or "sweter" in n:
             return "sueter/sweter"
