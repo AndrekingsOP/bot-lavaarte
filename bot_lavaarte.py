@@ -1,3 +1,4 @@
+# HILTON_ORIENTE_BLINDADO_1.0.2
 # =========================================================================
 # BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
 # MODELOS 100% FLASH + HOMOLOGACIÓN AISLADA POR HOTEL (FONTANA / OCEANÍA / WYNDHAM)
@@ -264,6 +265,8 @@ def ejecutar_post_apps_script(url, payload, timeout=85):
 # -------------------------------------------------------------------------
 # PRECIOS OFICIALES HAMPTON / HILTON
 # -------------------------------------------------------------------------
+VERSION_BOT = "HILTON_ORIENTE_BLINDADO_1.0.1"
+
 PRECIOS_HOTEL_CACHE = {}
 PRECIOS_HOTEL_KEYS = {
     "hampton": "HUESPEDES",
@@ -449,7 +452,8 @@ def _clave_prenda_hotel_alias_base(n):
 
     # Ropa interior: todas estas palabras significan el mismo artículo de huésped.
     if any(x in n for x in (
-        "boxer", "bóxer", "interior", "interiores",
+        "boxer", "bóxer", "interior", "interiores", "ropa interior",
+        "ropa interior/panties", "ropa interior/underwear",
         "panty", "panties", "calzoncillo", "undershort", "underwear"
     )):
         return "interiores/panties"
@@ -544,64 +548,93 @@ def _buscar_por_codigo_oficial(precios, codigo):
 
 
 def _buscar_precio_oficial(nombre_prenda, precios):
-    """Encuentra el artículo OFICIAL de Sheets. Nunca genera precios."""
+    """Homologa una prenda de Gemini contra la LISTA OFICIAL recibida de Sheets.
+
+    Importante: esta función jamás consulta catálogos históricos ni inventa precios.
+    Solo puede devolver un artículo que exista en `precios`.
+    """
     if not nombre_prenda or not precios:
         return None
 
-    # 1. Primero canonicaliza la lectura de Gemini.
-    objetivo = _normalizar_clave_precio_sin_alias(nombre_prenda)
-    canonico = _clave_prenda_hotel_alias_base(objetivo) or objetivo
+    def norm(s):
+        if not s:
+            return ""
+        s = limpiar_texto_simple(str(s))
+        s = s.replace("t-shirt", "tshirt").replace("t shirt", "tshirt")
+        s = s.replace("dress shirt", "dressshirt")
+        s = s.replace("sweater", "sweter")
+        s = s.replace("underwear", "interiores")
+        s = s.replace("undershorts", "undershort")
+        s = s.replace("shorts", "short")
+        s = re.sub(r"[^a-z0-9]+", " ", s).strip()
+        return s
 
-    # 2. Coincidencia exacta/canónica contra cualquiera de los nombres
-    #    que pueda devolver Apps Script.
+    def semantic(s):
+        n = norm(s)
+        # Orden importante: jeans antes de pantalon para no convertir jeans en pantalon.
+        if "jeans" in n or re.search(r"\bjean\b", n):
+            return "jeans"
+        if any(x in n for x in ["boxer", "interior", "panty", "panties", "calzoncillo", "undershort"]):
+            return "interiores/panties"
+        if "bermuda de vestir" in n:
+            return "bermuda de vestir"
+        if "pantaloneta" in n or re.search(r"\bshort\b", n) or "bermuda" in n:
+            return "pantaloneta/short"
+        if "camiseta sport" in n or ("sport" in n and "camiseta" in n):
+            return "camiseta sport"
+        if "camiseta" in n or "tshirt" in n:
+            return "camiseta/tshirt"
+        if "camisa" in n or "dressshirt" in n:
+            return "camisa/dressshirt"
+        if "pantalon" in n or re.search(r"\bpants\b", n):
+            return "pantalon/pants"
+        if "calcetin" in n or "calcetines" in n or "media" in n or "medias" in n or "socks" in n:
+            return "calcetines/socks"
+        if "sueter" in n or "sweter" in n:
+            return "sueter/sweter"
+        if "pijama" in n or "pyjama" in n:
+            return "pijama"
+        return ""
+
+    objetivo = semantic(nombre_prenda) or _clave_prenda_hotel_alias_base(norm(nombre_prenda)) or norm(nombre_prenda)
+
+    # 1) Coincidencia semántica exacta. Permite que Sheets use variantes como
+    # "Pantalón/Pants/JEANS" sin salir del artículo oficial correspondiente.
+    candidatos = []
     for item in precios:
-        nombre_oficial = _nombre_item_oficial(item)
-        if not nombre_oficial:
+        oficial = _nombre_item_oficial(item)
+        if not oficial:
             continue
-        clave_oficial = _normalizar_clave_precio_sin_alias(nombre_oficial)
-        canonico_oficial = _clave_prenda_hotel_alias_base(clave_oficial) or clave_oficial
-        if canonico_oficial == canonico:
-            return item
-
-    # 3. IMPORTANTE: NO usar catálogos NORTE aquí.
-    # Hilton y Hampton reciben su lista oficial directamente desde Apps Script
-    # mediante OBTENER_PRECIOS_HOTEL. La homologación se hace únicamente
-    # contra esa lista recibida, nunca contra CODIGOS_HUESPEDES_NORTE.
-
-    # 4. Alias directos por si el catálogo de Sheets usa nombres diferentes.
-    alias_nombres = {
-        "interiores/panties": {"interiores", "panties", "interiores/panties", "calzoncillo/undershort", "boxer", "calzoncillo"},
-        "pantaloneta/short": {"pantaloneta", "short", "pantaloneta/short", "bermuda"},
-        "camisa/dressshirt": {"camisa", "dressshirt", "camisa/dressshirt"},
-        "camiseta/tshirt": {"camiseta", "tshirt", "camiseta/tshirt"},
-        "camiseta sport": {"camiseta sport", "sport camiseta"},
-        "pantalon/pants": {"pantalon", "pants", "pantalon/pants"},
-        "calcetines/socks": {"calcetines", "calcetin", "medias", "media", "socks", "sock", "calcetines/socks"},
-        "sueter/sweter": {"sueter", "sweter", "sweater", "sueter/sweter"},
-        "jeans": {"jean", "jeans", "blue jeans"},
-        "pijama": {"pijama", "pijamas", "pyjamas"},
-        "bermuda de vestir": {"bermuda de vestir"}
-    }
-    posibles = alias_nombres.get(canonico, {canonico})
-    candidatos = []
-    for item in precios:
-        nombre = _normalizar_clave_precio_sin_alias(_nombre_item_oficial(item))
-        canon_nombre = _clave_prenda_hotel_alias_base(nombre) or nombre
-        if nombre in posibles or canon_nombre in posibles:
+        sem = semantic(oficial)
+        canon = _clave_prenda_hotel_alias_base(_normalizar_clave_precio_sin_alias(oficial))
+        if sem == objetivo or canon == objetivo:
             candidatos.append(item)
+
     if len(candidatos) == 1:
         return candidatos[0]
 
-    # 5. Último recurso: coincidencia inequívoca por palabras.
-    palabras_obj = {p for p in re.findall(r"[a-z0-9]+", canonico) if len(p) >= 4}
+    # 2) Coincidencia normalizada exacta.
+    objetivo_norm = norm(nombre_prenda)
+    exactos = [
+        item for item in precios
+        if norm(_nombre_item_oficial(item)) == objetivo_norm
+    ]
+    if len(exactos) == 1:
+        return exactos[0]
+
+    # 3) Coincidencia por todas las palabras significativas del objetivo.
+    #    Solo acepta una única coincidencia para evitar precios ambiguos.
+    palabras_obj = set(re.findall(r"[a-z0-9]+", objetivo_norm))
+    palabras_obj -= {"dress", "shirt", "tshirt", "sweter", "pants", "socks"}
     candidatos = []
-    for item in precios:
-        nombre = _normalizar_clave_precio_sin_alias(_nombre_item_oficial(item))
-        palabras = {p for p in re.findall(r"[a-z0-9]+", nombre) if len(p) >= 4}
-        if palabras_obj and palabras_obj.issubset(palabras):
-            candidatos.append(item)
-    if len(candidatos) == 1:
-        return candidatos[0]
+    if palabras_obj:
+        for item in precios:
+            nom = norm(_nombre_item_oficial(item))
+            palabras = set(re.findall(r"[a-z0-9]+", nom))
+            if palabras_obj.issubset(palabras):
+                candidatos.append(item)
+        if len(candidatos) == 1:
+            return candidatos[0]
 
     return None
 
