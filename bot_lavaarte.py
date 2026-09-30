@@ -273,14 +273,35 @@ PRECIOS_HOTEL_KEYS = {
 }
 
 def _clave_precio_hotel(config_sesion):
-    key = str(config_sesion.get("key", "")).lower()
-    if key in PRECIOS_HOTEL_KEYS:
-        return key, PRECIOS_HOTEL_KEYS[key]
+    """Determina exclusivamente la lista oficial de precios del hotel.
+
+    Hilton/Hampton pertenecen a RUTA ORIENTE y nunca consultan catálogos
+    de huéspedes de la RUTA NORTE. El tipo de precio se fija por la clave
+    de sesión: huéspedes o empleados.
+    """
+    key = str(config_sesion.get("key", "")).strip().lower()
+
+    # BLINDAJE HILTON
+    if key == "hilton":
+        return "hilton_oriente", "HUESPEDES"
+    if key == "hilton_empleados":
+        return "hilton_oriente", "EMPLEADOS"
+
+    # BLINDAJE HAMPTON
+    if key == "hampton":
+        return "hampton_oriente", "HUESPEDES"
+    if key == "hampton_empleados":
+        return "hampton_oriente", "EMPLEADOS"
+
+    # Fallback solamente para sesiones antiguas que no tengan key.
     hotel = limpiar_texto_simple(config_sesion.get("hotel", ""))
-    if "hampton" in hotel:
-        return "hampton", str(config_sesion.get("tipo_precio", "HUESPEDES")).upper()
+    tipo = str(config_sesion.get("tipo_precio", "HUESPEDES")).upper()
+
     if "hilton" in hotel:
-        return "hilton", str(config_sesion.get("tipo_precio", "HUESPEDES")).upper()
+        return "hilton_oriente", "EMPLEADOS" if "empleado" in limpiar_texto_simple(config_sesion.get("servicio", "")) else "HUESPEDES"
+    if "hampton" in hotel:
+        return "hampton_oriente", "EMPLEADOS" if "empleado" in limpiar_texto_simple(config_sesion.get("servicio", "")) else "HUESPEDES"
+
     return None, None
 
 def obtener_precios_oficiales_hotel(config_sesion):
@@ -293,9 +314,17 @@ def obtener_precios_oficiales_hotel(config_sesion):
         return PRECIOS_HOTEL_CACHE[cache_key]
 
     hotel = config_sesion.get("hotel", "")
+
+    # Hilton/Hampton: la consulta oficial SIEMPRE pertenece a ORIENTE.
+    # Se envían hotel + ruta + tipo_precio para que Apps Script no pueda
+    # resolver accidentalmente una tabla/catálogo de Norte.
+    hotel_consulta = "Hilton" if key == "hilton_oriente" else (
+        "Hampton" if key == "hampton_oriente" else hotel
+    )
     payload = {
         "accion": "OBTENER_PRECIOS_HOTEL",
-        "hotel": hotel,
+        "hotel": hotel_consulta,
+        "ruta": "Oriente" if key in ("hilton_oriente", "hampton_oriente") else config_sesion.get("ruta", ""),
         "tipo_precio": tipo_precio
     }
 
@@ -534,12 +563,10 @@ def _buscar_precio_oficial(nombre_prenda, precios):
         if canonico_oficial == canonico:
             return item
 
-    # 3. Código oficial del catálogo de huéspedes.
-    codigo = CODIGOS_HUESPEDES_NORTE.get(canonico)
-    if codigo is not None:
-        item = _buscar_por_codigo_oficial(precios, codigo)
-        if item:
-            return item
+    # 3. IMPORTANTE: NO usar catálogos NORTE aquí.
+    # Hilton y Hampton reciben su lista oficial directamente desde Apps Script
+    # mediante OBTENER_PRECIOS_HOTEL. La homologación se hace únicamente
+    # contra esa lista recibida, nunca contra CODIGOS_HUESPEDES_NORTE.
 
     # 4. Alias directos por si el catálogo de Sheets usa nombres diferentes.
     alias_nombres = {
@@ -602,8 +629,12 @@ def aplicar_precios_oficiales_hotel(filas, config_sesion, precios_oficiales):
         if codigo_oficial is not None:
             f["codigo"] = codigo_oficial
 
-        f["precio_fuente"] = "LISTA OFICIAL DE PRECIOS"
-        f["tipo_precio"] = config_sesion.get("tipo_precio", "HUESPEDES")
+        f["precio_fuente"] = "LISTA OFICIAL DE PRECIOS - ORIENTE" if str(config_sesion.get("key", "")).lower() in ("hilton", "hilton_empleados", "hampton", "hampton_empleados") else "LISTA OFICIAL DE PRECIOS"
+        f["tipo_precio"] = (
+            "HUESPEDES" if str(config_sesion.get("key", "")).lower() == "hilton" else
+            "EMPLEADOS" if str(config_sesion.get("key", "")).lower() == "hilton_empleados" else
+            config_sesion.get("tipo_precio", "HUESPEDES")
+        )
 
     if errores:
         raise ValueError(
@@ -1058,6 +1089,9 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
         Operación activa: Hotel '{hotel}', Servicio '{servicio}', Clave: '{key}'.
         
         REGLAS ESTRICTAS Y AISLADAS POR HOTEL:
+        0. REGLA ABSOLUTA HILTON: Si Clave = 'hilton', trabaja ÚNICAMENTE con Hilton Huéspedes de RUTA ORIENTE.
+           NO uses, consultes, nombres ni deduzcas precios/códigos de ningún catálogo Norte.
+           El precio final SIEMPRE será reemplazado por la lista oficial devuelta por Google Sheets.
         1. REGLAS DE HOMOLOGACIÓN DE PRENDAS: conserva el significado exacto de lo escrito.
            - 'boxer', 'bóxer', 'interior', 'interiores', 'panty' y 'panties' representan ROPA INTERIOR.
            - 'bermuda', 'pantaloneta' y 'short' representan PANTALONETA/SHORT.
@@ -1074,8 +1108,7 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
            el precio oficial será colocado posteriormente por el sistema desde la
            hoja PRECIOS de Google Sheets.
 
-        CATÁLOGO GLOBAL DE APOYO:
-        {CATALOGO_GLOBAL}
+        {"CATÁLOGO GLOBAL DE APOYO:\n" + CATALOGO_GLOBAL if not es_hampton_hilton else ""}
 
         {(
             "CATÁLOGO OFICIAL DE PRENDAS PARA ESTE HOTEL / TIPO DE PRECIO:\n" +
