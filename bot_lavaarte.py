@@ -1,4 +1,4 @@
-# HILTON_ORIENTE_BLINDADO_1.0.2
+# LAVAARTE_BOT_DEFINITIVO_3.0.0 — HILTON ORIENTE BLINDADO + MOTOR LENCERIA/MANTELERIA
 # =========================================================================
 # BOT CENTRAL LAVAARTE SAS - AUDITORÍA Y TRAZABILIDAD LOGÍSTICA COMPLETA
 # MODELOS 100% FLASH + HOMOLOGACIÓN AISLADA POR HOTEL (FONTANA / OCEANÍA / WYNDHAM)
@@ -265,7 +265,7 @@ def ejecutar_post_apps_script(url, payload, timeout=85):
 # -------------------------------------------------------------------------
 # PRECIOS OFICIALES HAMPTON / HILTON
 # -------------------------------------------------------------------------
-VERSION_BOT = "HILTON_ORIENTE_BLINDADO_1.0.1"
+VERSION_BOT = "HILTON_HUESPEDES_MANUAL_2.0.0"
 
 PRECIOS_HOTEL_CACHE = {}
 PRECIOS_HOTEL_KEYS = {
@@ -1037,6 +1037,217 @@ def respaldar_lote_fotos_en_drive(imgs, hotel_nom, ruta_nom):
     except Exception as e:
         print(f"Aviso: Respaldo de soporte en Drive omitido o fallido: {e}")
 
+
+# -------------------------------------------------------------------------
+# HILTON HUÉSPEDES — MÓDULO AISLADO Y MANUAL
+# -------------------------------------------------------------------------
+# Este módulo NO consulta Apps Script para precios. La tabla fue suministrada
+# por el usuario y es la única fuente de precio para Hilton Huéspedes.
+# La hoja destino sigue siendo HILTON_DATOS y la ruta Oriente.
+# Los IDs son internos y estables, asignados en el mismo orden de la tabla.
+HILTON_HUESPEDES_CATALOGO = {
+    "abrigo/coat":                 {"id": 1,  "prenda": "Abrigo/ Coat",                 "servicio": "Lavado en seco", "precio": 15800},
+    "bata/dress":                  {"id": 2,  "prenda": "Bata/Dress",                  "servicio": "Lavado en seco", "precio": 15500},
+    "bermuda de vestir":           {"id": 3,  "prenda": "Bermuda de vestir",           "servicio": "Lavado",          "precio": 7850},
+    "brassiere/brassiere":         {"id": 4,  "prenda": "Brassiere/Brassiere",         "servicio": "Lavado",          "precio": 4850},
+    "bufanda/scarf":               {"id": 5,  "prenda": "Bufanda/Scarf",               "servicio": "Lavado en seco", "precio": 7950},
+    "blusa/blouse":                {"id": 6,  "prenda": "Blusa/Blouse",                "servicio": "Lavado en seco", "precio": 7950},
+    "blusa en seda/silk blouse":   {"id": 7,  "prenda": "Blusa en seda/ Silk blouse",  "servicio": "Lavado en seco", "precio": 7950},
+    "camisa/dress shirt":          {"id": 8,  "prenda": "Camisa/Dress Shirt",          "servicio": "Lavado en seco", "precio": 7950},
+    "camiseta sport":              {"id": 9,  "prenda": "Camiseta Sport",              "servicio": "Lavado",          "precio": 7950},
+    "camiseta/t shirt":            {"id": 10, "prenda": "Camiseta/T Shirt",            "servicio": "Lavado",          "precio": 7350},
+    "calzoncillo/undershort":      {"id": 11, "prenda": "Calzoncillo/Undershort",      "servicio": "Lavado",          "precio": 2700},
+    "calcetines/socks":            {"id": 12, "prenda": "Calcetines/Socks",            "servicio": "Lavado",          "precio": 2700},
+    "corbata/tie":                 {"id": 13, "prenda": "Corbata/Tie",                 "servicio": "Lavado en seco", "precio": 7950},
+    "chaleco/vest":                {"id": 14, "prenda": "Chaleco/Vest",                "servicio": "Lavado",          "precio": 9525},
+    "chaqueta/jacket":             {"id": 15, "prenda": "Chaqueta/Jacket",             "servicio": "Lavado en seco", "precio": 9750},
+    "chaqueta plumas/down jacket": {"id": 16, "prenda": "Chaqueta plumas/Down Jacket", "servicio": "Lavado en seco", "precio": 18509},
+    "falda/skirt":                 {"id": 17, "prenda": "Falda/ Skirt",                 "servicio": "Lavado en seco", "precio": 7850},
+    "faja":                        {"id": 18, "prenda": "Faja",                        "servicio": "Lavado",          "precio": 9550},
+    "gorro/cap":                   {"id": 19, "prenda": "Gorro/Cap",                   "servicio": "Lavado",          "precio": 6780},
+    "guante/glove":                {"id": 20, "prenda": "Guante/Glove",                "servicio": "Lavado",          "precio": 6780},
+    "interiores/panties":          {"id": 21, "prenda": "Interiores/ Panties",          "servicio": "Lavado",          "precio": 2700},
+    "jeans":                       {"id": 22, "prenda": "Jeans",                       "servicio": "Lavado",          "precio": 7950},
+    "maleta/morral":               {"id": 23, "prenda": "Maleta / morral",               "servicio": "Lavado",          "precio": 17650},
+    "media velada":                {"id": 24, "prenda": "Media velada",                "servicio": "Lavado",          "precio": 4850},
+    "overol/overalls":             {"id": 25, "prenda": "Overol/Overalls",             "servicio": "Lavado en seco", "precio": 14500},
+    "pantalon/pants":              {"id": 26, "prenda": "Pantalón/Pants",              "servicio": "Lavado en seco", "precio": 7950},
+    "pantaloneta/short":           {"id": 27, "prenda": "Pantaloneta/Short",           "servicio": "Lavado",          "precio": 7250},
+    "panuelo":                     {"id": 28, "prenda": "Pañuelo",                     "servicio": "Lavado",          "precio": 2580},
+    "pijama":                      {"id": 29, "prenda": "Pijama",                      "servicio": "Lavado",          "precio": 11350},
+    "ruana":                       {"id": 30, "prenda": "Ruana",                       "servicio": "Lavado en seco", "precio": 15800},
+    "sueter/sweter":               {"id": 31, "prenda": "Suéter/Sweter",               "servicio": "Lavado en seco", "precio": 7950},
+    "sudadera/sweatshirt":         {"id": 32, "prenda": "Sudadera/Sweatshirt",         "servicio": "Lavado",          "precio": 14500},
+    "traje/suit":                  {"id": 33, "prenda": "Traje/Suit",                  "servicio": "Lavado en seco", "precio": 15500},
+    "toalla/huespedes":            {"id": 34, "prenda": "Toalla/ huespedes",            "servicio": "Lavado",          "precio": 7500},
+    "vestido de bano":             {"id": 35, "prenda": "Vestido baño",                "servicio": "Lavado",          "precio": 10250},
+    "zapatos tenis/tenis shoes":   {"id": 36, "prenda": "Zapatos tenis/ Tenis Shoes",  "servicio": "Lavado",          "precio": 18500},
+    "planchado":                   {"id": 37, "prenda": "PLANCHADO",                   "servicio": "Planchado",        "precio": 6200},
+    "planchado abrigos y trajes":  {"id": 38, "prenda": "PLANCHADO ABRIGOS Y TRAJES",  "servicio": "Planchado",        "precio": 12400},
+}
+
+
+def _norm_hilton_huespedes(txt):
+    """Normalización exclusiva de Hilton Huéspedes."""
+    if not txt:
+        return ""
+    s = unicodedata.normalize("NFKD", str(txt))
+    s = "".join(ch for ch in s if not unicodedata.combining(ch)).lower().strip()
+    s = s.replace("ó", "o").replace("é", "e")
+    s = re.sub(r"[()\[\]{}]", " ", s)
+    s = re.sub(r"[^a-z0-9/ ]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _clasificar_hilton_huespedes(nombre):
+    """Convierte la escritura de la planilla a UNA clave del catálogo Hilton."""
+    n = _norm_hilton_huespedes(nombre)
+    compact = n.replace(" ", "")
+
+    # Casos específicos de la planilla Hilton mostrada por el usuario.
+    if "pantalon" in n and ("jean" in n or "jeans" in n):
+        return "jeans"
+    if "jean" in n or "jeans" in n:
+        return "jeans"
+    if "boxer" in n or "calzoncillo" in n or "undershort" in n or "underwear" in n:
+        return "calzoncillo/undershort"
+    if "media velada" in n:
+        return "media velada"
+    if "calcetin" in n or "calcetines" in n or "socks" in n or re.search(r"\bmedia\b", n) or re.search(r"\bmedias\b", n):
+        return "calcetines/socks"
+    if "ropa interior" in n or "interiores" in n or "panty" in n or "panties" in n:
+        return "interiores/panties"
+    if "sueter" in n or "sweter" in n or "buso" in n or "busos" in n:
+        return "sueter/sweter"
+    if "camiseta" in n and "sport" in n:
+        return "camiseta sport"
+    if "camiseta" in n or "t shirt" in n or "tshirt" in compact:
+        return "camiseta/t shirt"
+    if "camisa" in n or "dress shirt" in n or "dressshirt" in compact:
+        return "camisa/dress shirt"
+    if "pantaloneta" in n or re.search(r"\bshort\b", n):
+        return "pantaloneta/short"
+    if "bermuda de vestir" in n:
+        return "bermuda de vestir"
+    if "pantalon" in n or re.search(r"\bpants\b", n):
+        return "pantalon/pants"
+    if "abrigo" in n or "coat" in n:
+        return "abrigo/coat"
+    if "bata" in n or "dress" in n:
+        return "bata/dress"
+    if "brassiere" in n or "brasier" in n or "bra" in n:
+        return "brassiere/brassiere"
+    if "bufanda" in n or "scarf" in n or "pasmina" in n:
+        return "bufanda/scarf"
+    if "blusa en seda" in n or "silk blouse" in n:
+        return "blusa en seda/silk blouse"
+    if "blusa" in n:
+        return "blusa/blouse"
+    if "corbata" in n or "tie" in n:
+        return "corbata/tie"
+    if "chaleco" in n or re.search(r"\bvest\b", n):
+        return "chaleco/vest"
+    if "chaqueta plumas" in n or "down jacket" in n:
+        return "chaqueta plumas/down jacket"
+    if "chaqueta" in n or "jacket" in n:
+        return "chaqueta/jacket"
+    if "falda" in n or "skirt" in n:
+        return "falda/skirt"
+    if "faja" in n:
+        return "faja"
+    if "gorro" in n or "cap" in n:
+        return "gorro/cap"
+    if "guante" in n or "glove" in n:
+        return "guante/glove"
+    if "maleta" in n or "morral" in n:
+        return "maleta/morral"
+    if "overol" in n or "overalls" in n:
+        return "overol/overalls"
+    if "panuelo" in n or "pañuelo" in str(nombre).lower():
+        return "panuelo"
+    if "pijama" in n or "pyjama" in n:
+        return "pijama"
+    if "ruana" in n:
+        return "ruana"
+    if "sudadera" in n or "sweatshirt" in n:
+        return "sudadera/sweatshirt"
+    if "traje" in n or "suit" in n:
+        return "traje/suit"
+    if "vestido" in n and ("bano" in n or "baño" in str(nombre).lower()):
+        return "vestido de bano"
+    if "toalla" in n:
+        return "toalla/huespedes"
+    if "tenis" in n or "zapatos" in n or "shoes" in n:
+        return "zapatos tenis/tenis shoes"
+    if n == "planchado":
+        return "planchado"
+    if "planchado" in n and "abrigo" in n and "traje" in n:
+        return "planchado abrigos y trajes"
+
+    return None
+
+
+def procesar_hilton_huespedes_manual(filas, fecha_hoy, correccion_usuario=None):
+    """Procesa Hilton Huéspedes sin Apps Script: catálogo manual cerrado."""
+    if not isinstance(filas, list):
+        raise ValueError("Gemini no devolvió una lista válida para Hilton Huéspedes.")
+
+    salida = []
+    ultimo_habitacion = ""
+    errores = []
+
+    for idx, f in enumerate(filas, start=1):
+        if not isinstance(f, dict):
+            continue
+
+        hab = str(f.get("habitacion", f.get("habitacion_o_persona", "")) or "").strip()
+        # Gemini debe propagar la habitación cuando la celda viene vacía/ditto.
+        if hab and any(ch.isdigit() for ch in hab):
+            ultimo_habitacion = hab
+        elif ultimo_habitacion:
+            hab = ultimo_habitacion
+        else:
+            hab = "SIN HABITACION"
+
+        clave = _clasificar_hilton_huespedes(f.get("prenda", ""))
+        if not clave or clave not in HILTON_HUESPEDES_CATALOGO:
+            errores.append(str(f.get("prenda", "Prenda sin nombre")))
+            continue
+
+        item = HILTON_HUESPEDES_CATALOGO[clave]
+        cantidad = max(1, a_entero(f.get("cantidad", 1)))
+
+        fila = dict(f)
+        fila["fecha"] = f.get("fecha") or fecha_hoy
+        fila["habitacion"] = hab
+        fila["codigo"] = item["id"]
+        fila["prenda"] = item["prenda"]
+        fila["servicio"] = item["servicio"]
+        fila["cantidad"] = cantidad
+        fila["valorUnitario"] = float(item["precio"])
+        fila["valorTotal"] = cantidad * float(item["precio"])
+        fila["remision"] = ""
+        fila["extra"] = "No"
+        fila["tipo_operacion_detectada"] = "HUESPEDES"
+        fila["precio_fuente"] = "CATALOGO MANUAL HILTON HUESPEDES - ORIENTE 2026"
+        fila["tipo_precio"] = "HUESPEDES"
+        fila["ruta_precio"] = "Oriente"
+        fila["hotel_precio"] = "Hilton"
+        salida.append(fila)
+
+    if errores:
+        raise ValueError(
+            "Hilton Huéspedes: no pude clasificar estas prendas del catálogo manual: "
+            + ", ".join(errores)
+        )
+
+    if not salida:
+        raise ValueError("Hilton Huéspedes: no se detectaron prendas válidas en la imagen.")
+
+    return salida
+
+
 def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None):
     ahora_bog = obtener_ahora_bogota()
     fecha_hoy = ahora_bog.strftime("%d/%m/%Y")
@@ -1068,11 +1279,52 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
 
     # Hampton / Hilton: la IA solo clasifica la prenda. El precio SIEMPRE
     # sale de la hoja oficial de precios de Google Sheets.
-    if es_hampton_hilton:
+    if es_hampton_hilton and key != "hilton":
         precios_oficiales = obtener_precios_oficiales_hotel(config_sesion)
 
-    # 1. PROMPT EFICACIA DOTACIONES
-    if es_eficacia:
+    # 1. PROMPT EXCLUSIVO HILTON HUÉSPEDES
+    if key == "hilton":
+        prompt = f"""
+        Eres el lector exclusivo de planillas de LAVADO DE ROPA HUÉSPEDES del HOTEL HILTON GARDEN INN BOGOTÁ.
+        NO uses ningún catálogo externo, Norte, Hampton, Wyndham ni precios de memoria.
+
+        TU ÚNICA TAREA ES LEER LA PLANILLA DE LA FOTO.
+
+        REGLAS DE LECTURA DE ESTA PLANILLA:
+        1. Lee HAB., CANT y PRENDA. COLOR, MARCA y OBSERVACIÓN no se guardan como prendas.
+        2. Lee también la fecha de la planilla del encabezado. Si aparece, por ejemplo, "30 Sep DE 2026", devuelve "30/09/2026" en cada fila.
+        3. Si una fila de HAB. está vacía, tiene una raya, comillas, ditto o marca que significa "igual que arriba", usa la ÚLTIMA HABITACIÓN NUMÉRICA visible.
+        4. Si aparece una nueva habitación numérica, desde esa fila las filas siguientes pertenecen a esa nueva habitación hasta que aparezca otra.
+        5. Conserva cantidades exactamente.
+        6. Lee variaciones manuscritas:
+           - Pantalón / Pantalones -> Pantalón
+           - Pantalón Jeans / Jeans -> Jeans
+           - Suéter / Sueter / Buso / Busos -> Suéter
+           - Camisa / Camisas -> Camisa
+           - Camiseta / Camisetas -> Camiseta
+           - Boxer -> Boxer
+           - Medias / Media / Calcetines -> Calcetines
+           - Toalla -> Toalla
+        6. NO confundas Pantalón con Jeans: si dice Jeans o Pantalón Jeans, es Jeans.
+        7. NO confundas Camisa con Camiseta.
+        8. Devuelve una fila por cada línea de prenda.
+
+        FECHA: {fecha_hoy}
+        {f"CORRECCIÓN DEL USUARIO: {correccion_usuario}" if correccion_usuario else ""}
+
+        Devuelve EXCLUSIVAMENTE JSON válido, sin markdown, con este formato:
+        [
+          {{
+            "fecha": "{fecha_hoy}",
+            "habitacion": "713",
+            "cantidad": 1,
+            "prenda": "Pantalón"
+          }}
+        ]
+        """
+
+    # 2. PROMPT EFICACIA DOTACIONES
+    elif es_eficacia:
         prompt = f"""
         Eres el auditor oficial de Lavaarte Lavandería SAS para el cliente 'EFICACIA DOTACIONES'.
         En las planillas o notas manuscritas de Eficacia, cada línea o bloque pertenece a una EMPRESA / CLIENTE cliente de Eficacia.
@@ -1193,6 +1445,15 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
     texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
     filas = json.loads(texto)
 
+    # Hilton Huéspedes queda COMPLETAMENTE aislado del flujo genérico.
+    # No consulta Apps Script para precios ni pasa por homologación de Norte.
+    if key == "hilton":
+        return procesar_hilton_huespedes_manual(
+            filas,
+            fecha_hoy,
+            correccion_usuario=correccion_usuario
+        )
+
     if isinstance(filas, list):
         for f in filas:
             if not f.get("fecha"):
@@ -1230,7 +1491,7 @@ def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None
                         f["valorTotal"] = a_entero(f.get("cantidad", 1)) * 1700
 
     # FUENTE ÚNICA DE PRECIOS: Hampton / Hilton
-    if es_hampton_hilton and isinstance(filas, list):
+    if es_hampton_hilton and key != "hilton" and isinstance(filas, list):
         aplicar_precios_oficiales_hotel(
             filas,
             config_sesion,
@@ -1365,6 +1626,215 @@ def enviar_mensaje_segmentado(chat_id, texto, reply_markup=None):
         markup = reply_markup if i == len(partes) - 1 else None
         bot.send_message(chat_id, p, reply_markup=markup, parse_mode='Markdown')
 
+
+# =========================================================================
+# MOTOR PROFESIONAL DE LENCERÍA / MANTELERÍA — MENÚ SIN GEMINI
+# Catálogo base extraído de ITEMS COMPLETOS.xlsx.
+# Los precios del Excel NO se utilizan aquí. Solo artículos.
+# Los artículos nuevos se persisten en la hoja CATALOGO_BOT mediante Apps Script.
+# =========================================================================
+CATALOGOS_MANUALES_BASE = {
+    "wyndham_lenceria": [
+        "BATA", "COBIJA", "COJIN", "DUVET", "FACIAL", "FALDON", "FUNDA",
+        "PIE DE CAMA", "PLUMON", "PROTECTOR ALMOHADA", "PROTECTOR DE COLCHON",
+        "SABANAS AJUSTABLES", "SABANAS PLANAS", "TOALLA COSTURAS A LOS LADOS",
+        "TOALLAS DE CUERPO", "TOALLAS DE MANO", "TOALLAS DE TAPETE"
+    ],
+    "wyndham_manteleria": [
+        "LICRA", "MANTEL", "MANTEL AZUL", "MANTEL AMARILLO", "MANTEL ROJO",
+        "MANTEL SINTETICO", "MULETON", "SERVILLETA", "REPASADOR"
+    ],
+    "fontana": [
+        "BATA", "COBIJA", "COJÍN", "ALMOHADA", "DUVET", "FALDON CAMA", "FUNDA",
+        "PIECERO", "PLUMÓN", "PROTECTOR ALMOHADA", "PROTECTOR COLCHÓN",
+        "SABANA AJUSTABLE", "SABANA", "SABANA CORTESIA", "TOALLA CUERPO",
+        "TOALLA MANO", "TOALLA TAPETE"
+    ],
+    "oceania": [
+        "TOALLA CUERPO", "TOALLA MANO", "TOALLA TAPETE", "SABANA AJUSTABLE DOBLE",
+        "SABANA AJUSTABLE SENCILLA", "SOBRE SABANA DOBLE", "SOBRE SABANA SENCILLA",
+        "SABANA CORTESIA", "FUNDA RAYAS", "FUNDA LISA", "PROTECTOR COLCHON DOBLE",
+        "PROTECTOR COLCHON SENCILLO", "PROTECTOR ALMOHADA", "PIE DE CAMA", "FALDON",
+        "COJIN DECORATIVO", "COBIJAS", "BANDERA", "MANTEL"
+    ],
+    "suite_manteleria": [
+        "Faldon Prensado", "Licra Grande - café", "Licra Pequeña - Azul", "Mantel",
+        "Mantel lanudo", "Mantel redondo", "Mantel Rectangular", "Servilleta",
+        "Velo", "Tapas"
+    ],
+    "dann_lenceria": [
+        "AJUSTABLE", "COJIN GRANDE", "COJIN SASTRERIA", "COJIN.", "DUVET", "FALDON",
+        "FUNDA", "MANTEL", "PLUMON", "SABANA", "PIE DE CAMA", "ARREGLO TOALLAS",
+        "COBIJA SPA"
+    ]
+}
+
+MANUAL_CATALOGO_KEYS = set(CATALOGOS_MANUALES_BASE.keys())
+MANUAL_CATALOGO_PAGE_SIZE = 8
+
+def _catalogo_nombre_servicio(key):
+    cfg = ARBOL_SERVICIOS.get(key, {})
+    return str(cfg.get("servicio", "Lencería"))
+
+def obtener_catalogo_manual(chat_id, key):
+    """Carga catálogo base + artículos persistidos en Google Sheets."""
+    ses = sesiones.setdefault(chat_id, {})
+    base = list(CATALOGOS_MANUALES_BASE.get(key, []))
+    try:
+        cfg = ARBOL_SERVICIOS.get(key, {})
+        resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, {
+            "accion": "OBTENER_CATALOGO",
+            "ruta": cfg.get("ruta", "Oriente"),
+            "hotel": cfg.get("hotel", ""),
+            "servicio": cfg.get("servicio", ""),
+            "clave_catalogo": key
+        }, timeout=30)
+        if resp.get("status") == "SUCCESS":
+            for item in resp.get("items", []):
+                nombre = str(item.get("item", "")).strip()
+                if nombre and nombre not in base:
+                    base.append(nombre)
+    except Exception as e:
+        print(f"[CATALOGO] Usando catálogo base para {key}: {e}")
+    ses["catalogo_items"] = base
+    return base
+
+def _manual_resumen(chat_id):
+    ses = sesiones.get(chat_id, {})
+    items = ses.get("manual_cantidades", {})
+    activos = [(k, int(v)) for k, v in items.items() if int(v) > 0]
+    if not activos:
+        return "📋 *Sin cantidades seleccionadas todavía.*"
+    total = sum(v for _, v in activos)
+    txt = "📋 *RESUMEN ACTUAL*\n\n"
+    for nombre, cant in activos:
+        txt += f"• `{nombre}` — *{cant}*\n"
+    txt += f"\n📊 *TOTAL: {total}*"
+    return txt
+
+def _manual_menu_catalogo(chat_id, page=0):
+    ses = sesiones[chat_id]
+    key = ses["key"]
+    items = ses.get("catalogo_items") or obtener_catalogo_manual(chat_id, key)
+    ses["manual_page"] = max(0, min(page, max(0, (len(items)-1)//MANUAL_CATALOGO_PAGE_SIZE)))
+    page = ses["manual_page"]
+    inicio = page * MANUAL_CATALOGO_PAGE_SIZE
+    bloque = items[inicio:inicio + MANUAL_CATALOGO_PAGE_SIZE]
+
+    markup = InlineKeyboardMarkup(row_width=2)
+    for idx, nombre in enumerate(bloque, start=inicio):
+        cant = int(ses.get("manual_cantidades", {}).get(nombre, 0))
+        etiqueta = f"{nombre[:28]} [{cant}]"
+        markup.add(InlineKeyboardButton(etiqueta, callback_data=f"ml_item|{idx}"))
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ Anterior", callback_data=f"ml_page|{page-1}"))
+    if inicio + MANUAL_CATALOGO_PAGE_SIZE < len(items):
+        nav.append(InlineKeyboardButton("Siguiente ➡️", callback_data=f"ml_page|{page+1}"))
+    if nav:
+        markup.row(*nav)
+
+    markup.add(InlineKeyboardButton("🧾 Ver resumen", callback_data="ml_summary"))
+    markup.add(InlineKeyboardButton("➕ Agregar artículo", callback_data="ml_new"))
+    markup.add(InlineKeyboardButton("❌ Cancelar", callback_data="ml_cancel"))
+
+    movimiento = "RECEPCIÓN" if ses.get("movimiento") == "RECEPCIÓN" else "DESPACHO EN PLANTA"
+    texto = f"🧺 *{movimiento} — {ses.get('hotel', 'Hotel')}*\n"
+    texto += f"Servicio: *{ses.get('servicio', 'Lencería')}*\n\n"
+    texto += "Selecciona un artículo. Al abrirlo podrás sumar +1, +5, +10, +25, +50 o escribir una cantidad.\n\n"
+    texto += _manual_resumen(chat_id)
+    return texto, markup
+
+def _manual_editor(chat_id, idx):
+    ses = sesiones[chat_id]
+    items = ses.get("catalogo_items", [])
+    if idx < 0 or idx >= len(items):
+        return "⚠️ Artículo no encontrado.", InlineKeyboardMarkup()
+    nombre = items[idx]
+    ses["manual_item_index"] = idx
+    cant = int(ses.get("manual_cantidades", {}).get(nombre, 0))
+    markup = InlineKeyboardMarkup(row_width=3)
+    markup.row(InlineKeyboardButton("−1", callback_data="ml_dec|1"), InlineKeyboardButton(str(cant), callback_data="ml_noop"), InlineKeyboardButton("+1", callback_data="ml_inc|1"))
+    markup.row(InlineKeyboardButton("+5", callback_data="ml_inc|5"), InlineKeyboardButton("+10", callback_data="ml_inc|10"), InlineKeyboardButton("+25", callback_data="ml_inc|25"))
+    markup.row(InlineKeyboardButton("+50", callback_data="ml_inc|50"), InlineKeyboardButton("✏️ Escribir cantidad", callback_data="ml_custom"))
+    markup.add(InlineKeyboardButton("⬅️ Volver a artículos", callback_data="ml_backcat"))
+    texto = f"🧺 *{nombre}*\n\nCantidad actual: *{cant}*\n\nUsa los incrementos rápidos o escribe directamente la cantidad total."
+    return texto, markup
+
+def menu_manual_operacion(key):
+    cfg = ARBOL_SERVICIOS.get(key, {})
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("📥 Recibir", callback_data="ml_start|RECIBIR"),
+        InlineKeyboardButton("📤 Despachar en planta", callback_data="ml_start|DESPACHAR")
+    )
+    markup.add(InlineKeyboardButton("🤝 Entregar en hotel", callback_data="ml_entrega_hotel"))
+    markup.add(InlineKeyboardButton("📋 Ver catálogo", callback_data="ml_viewcat"))
+    markup.add(InlineKeyboardButton("➕ Agregar artículo", callback_data="ml_new"))
+    markup.add(InlineKeyboardButton("⬅️ Cambiar hotel", callback_data="ruta_" + str(cfg.get("ruta", "Oriente")).lower()))
+    return markup
+
+def _manual_summary_markup():
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(InlineKeyboardButton("💾 Guardar", callback_data="ml_save"), InlineKeyboardButton("✏️ Volver", callback_data="ml_backcat"))
+    markup.add(InlineKeyboardButton("❌ Cancelar", callback_data="ml_cancel"))
+    return markup
+
+def _guardar_operacion_manual(chat_id):
+    ses = sesiones.get(chat_id, {})
+    cantidades = ses.get("manual_cantidades", {})
+    filas = []
+    fecha = obtener_ahora_bogota().strftime("%d/%m/%Y")
+    for prenda, cantidad in cantidades.items():
+        cantidad = int(cantidad)
+        if cantidad <= 0:
+            continue
+        filas.append({
+            "fecha": fecha,
+            "prenda": prenda,
+            "cantidad": cantidad,
+            "tipo_operacion_detectada": "LENCERIA_MATRIZ",
+            "extra": "No",
+            "habitacion": "",
+            "remision": ""
+        })
+    if not filas:
+        bot.send_message(chat_id, "⚠️ Selecciona al menos un artículo antes de guardar.")
+        return
+
+    cfg = ses
+    hora = obtener_ahora_bogota().strftime("%I:%M %p")
+    dia = cfg.get("dia_despacho_corrido") if cfg.get("movimiento") == "ENTREGA" and cfg.get("dia_despacho_corrido") else obtener_ahora_bogota().day
+    token = f"{cfg.get('hotel','HOTEL')}_{dia}_MANUAL_{str(uuid.uuid4())[:10]}"
+    payload = {
+        "accion": "GUARDAR",
+        "ruta": cfg.get("ruta", "Oriente"),
+        "hotel": cfg.get("hotel", "Hotel"),
+        "destino": cfg.get("hoja", ""),
+        "tipo_operacion": "LENCERIA_MATRIZ",
+        "movimiento": "RECEPCIÓN" if cfg.get("movimiento") == "RECEPCIÓN" else "ENTREGA",
+        "responsable_lavaarte": cfg.get("resp_lavaarte", "Conductor Lavaarte"),
+        "responsable_hotel": cfg.get("resp_hotel", "Recepción / Ama de llaves"),
+        "hora_sellada": hora,
+        "dia": dia,
+        "filas": filas,
+        "id_transaccion": token
+    }
+    bot.send_message(chat_id, "⏳ Guardando operación en Google Sheets...")
+    try:
+        resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=90)
+        if resp.get("status") == "SUCCESS":
+            hoja = resp.get("hoja_guardada", cfg.get("hoja", "Google Sheets"))
+            total = sum(x["cantidad"] for x in filas)
+            sesiones[chat_id]["manual_cantidades"] = {}
+            sesiones[chat_id]["filas"] = []
+            bot.send_message(chat_id, f"✅ *OPERACIÓN GUARDADA*\n\n🏨 {cfg.get('hotel')} — {cfg.get('servicio')}\n📦 Movimiento: *{payload['movimiento']}*\n📊 Total: *{total}*\n📅 Día: *{dia}*\n📋 Hoja: `{hoja}`", parse_mode='Markdown', reply_markup=menu_post_guardado())
+        else:
+            bot.send_message(chat_id, "⚠️ Google Sheets no confirmó el guardado: " + str(resp.get("mensaje", "respuesta desconocida")))
+    except Exception as e:
+        bot.send_message(chat_id, "❌ Error guardando operación: " + str(e))
+
 def menu_principal():
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -1395,8 +1865,18 @@ def menu_confirmacion_despacho_en_sitio():
     )
     return markup
 
-def menu_firma_pantalla(hotel_nom):
-    url_pantalla = f"{URL_APPS_SCRIPT}?hotel={requests.utils.quote(str(hotel_nom))}"
+def menu_firma_pantalla(hotel_nom, ses=None):
+    ses = ses or {}
+    params = {
+        "hotel": str(hotel_nom),
+        "ruta": str(ses.get("ruta", "Oriente")),
+        "fila_despacho": str(ses.get("despacho_pendiente", {}).get("fila", "")),
+        "total_prendas": str(ses.get("despacho_pendiente", {}).get("total_prendas", 0)),
+        "responsable_lavaarte": str(ses.get("resp_lavaarte", ses.get("despacho_pendiente", {}).get("despachado_por", "Conductor Lavaarte"))),
+        "recibido_por": str(ses.get("recibido_por_hotel", "Personal Hotel"))
+    }
+    query = "&".join(f"{requests.utils.quote(str(k))}={requests.utils.quote(str(v))}" for k, v in params.items())
+    url_pantalla = f"{URL_APPS_SCRIPT}?{query}"
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(
         InlineKeyboardButton("✍️ Abrir Pantalla para Firmar Aquí", web_app=WebAppInfo(url=url_pantalla)),
@@ -1656,12 +2136,154 @@ def seleccionar_hotel(call):
     sesiones[chat_id]["key"] = key
     sesiones[chat_id]["filas"] = []
     
+    if key in MANUAL_CATALOGO_KEYS:
+        sesiones[chat_id]["catalogo_items"] = obtener_catalogo_manual(chat_id, key)
+        sesiones[chat_id]["manual_cantidades"] = {}
+        bot.edit_message_text(
+            "🧺 *" + str(cfg['hotel']) + " — " + str(cfg['servicio']) + "*\n\nSelecciona una operación:",
+            chat_id, call.message.message_id,
+            reply_markup=menu_manual_operacion(key),
+            parse_mode='Markdown'
+        )
+        return
+
     bot.edit_message_text(
         "🏨 Operación: *" + str(cfg['hotel']) + " (" + str(cfg['servicio']) + ")*\n\n¿Qué movimiento deseas registrar?",
         chat_id, call.message.message_id,
         reply_markup=menu_recibir_entregar(key),
         parse_mode='Markdown'
     )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('ml_start|'))
+def iniciar_operacion_manual(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    ses = sesiones.get(chat_id, {})
+    movimiento = call.data.split('|',1)[1]
+    ses["movimiento"] = "RECEPCIÓN" if movimiento == "RECIBIR" else "ENTREGA"
+    if movimiento == "DESPACHAR":
+        ses["dia_despacho_corrido"] = calcular_dia_corrido_logistica()
+    else:
+        ses.pop("dia_despacho_corrido", None)
+    ses["manual_cantidades"] = {}
+    ses["paso_custodia"] = "MANUAL_RESP_HOTEL" if movimiento == "RECIBIR" else "MANUAL_RESP_LAVAARTE"
+    if movimiento == "RECIBIR":
+        texto = f"📥 *RECEPCIÓN — {ses.get('hotel','Hotel')}*\n\n¿Quién entrega la ropa por parte del hotel? (Nombre y cargo):"
+    else:
+        texto = f"📤 *DESPACHO EN PLANTA — {ses.get('hotel','Hotel')}*\n\n¿Quién despacha la ropa por parte de Lavaarte? (Nombre del conductor/responsable):"
+    bot.edit_message_text(texto, chat_id, call.message.message_id, parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == 'ml_viewcat')
+def ver_catalogo_manual(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    ses = sesiones.get(chat_id, {})
+    if ses.get('key') not in MANUAL_CATALOGO_KEYS:
+        return
+    ses['catalogo_items'] = obtener_catalogo_manual(chat_id, ses['key'])
+    texto, markup = _manual_menu_catalogo(chat_id, 0)
+    bot.edit_message_text(texto, chat_id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == 'ml_new')
+def nuevo_item_manual(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    ses = sesiones.get(chat_id, {})
+    if ses.get('key') not in MANUAL_CATALOGO_KEYS:
+        return
+    ses['manual_return_to'] = 'MENU' if not ses.get('movimiento') else 'CATALOGO'
+    ses['paso_custodia'] = 'MANUAL_NUEVO_ITEM'
+    bot.send_message(chat_id, "➕ *NUEVO ARTÍCULO*\n\nEscribe el nombre exacto del nuevo artículo. No necesitas tocar el código ni Google Sheets.", parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == 'ml_entrega_hotel')
+def manual_entrega_hotel(call):
+    # Reutiliza el flujo de custodia y firma existente; el despacho manual
+    # ya quedó guardado con el mismo formato que los despachos anteriores.
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    ses = sesiones.get(chat_id, {})
+    key = ses.get('key')
+    cfg = ARBOL_SERVICIOS.get(key, ses)
+    sesiones[chat_id] = dict(cfg)
+    sesiones[chat_id]['key'] = key
+    sesiones[chat_id]['movimiento'] = 'ENTREGA'
+    sesiones[chat_id]['paso_custodia'] = 'ENT_QUIEN_ENTREGA_LAVAARTE'
+    bot.edit_message_text(f"🤝 *ENTREGA EN HOTEL — {cfg.get('hotel','Hotel')}*\n\n¿Quién entrega la ropa por parte de Lavaarte? (Nombre del conductor):", chat_id, call.message.message_id, parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('ml_page|'))
+def manual_pagina(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    page = int(call.data.split('|',1)[1])
+    texto, markup = _manual_menu_catalogo(chat_id, page)
+    bot.edit_message_text(texto, chat_id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('ml_item|'))
+def manual_seleccionar_item(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    idx = int(call.data.split('|',1)[1])
+    texto, markup = _manual_editor(chat_id, idx)
+    bot.edit_message_text(texto, chat_id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('ml_inc|') or call.data.startswith('ml_dec|'))
+def manual_incrementar_cantidad(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    ses = sesiones.get(chat_id, {})
+    idx = int(ses.get('manual_item_index', -1))
+    items = ses.get('catalogo_items', [])
+    if idx < 0 or idx >= len(items): return
+    nombre = items[idx]
+    delta = int(call.data.split('|',1)[1])
+    if call.data.startswith('ml_dec|'): delta = -delta
+    cantidades = ses.setdefault('manual_cantidades', {})
+    cantidades[nombre] = max(0, int(cantidades.get(nombre, 0)) + delta)
+    texto, markup = _manual_editor(chat_id, idx)
+    bot.edit_message_text(texto, chat_id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == 'ml_custom')
+def manual_cantidad_personalizada(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    sesiones[chat_id]['paso_custodia'] = 'MANUAL_CANTIDAD'
+    bot.send_message(chat_id, "✏️ Escribe la cantidad total para este artículo. Ejemplo: `100`", parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == 'ml_backcat')
+def manual_volver_catalogo(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    sesiones[chat_id]['paso_custodia'] = None
+    texto, markup = _manual_menu_catalogo(chat_id, sesiones[chat_id].get('manual_page',0))
+    bot.edit_message_text(texto, chat_id, call.message.message_id, reply_markup=markup, parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == 'ml_summary')
+def manual_resumen_callback(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    bot.edit_message_text(_manual_resumen(chat_id), chat_id, call.message.message_id, reply_markup=_manual_summary_markup(), parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == 'ml_save')
+def manual_guardar_callback(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    _guardar_operacion_manual(chat_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'ml_cancel')
+def manual_cancelar_callback(call):
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    key = sesiones.get(chat_id, {}).get('key')
+    if key in ARBOL_SERVICIOS:
+        sesiones[chat_id]['manual_cantidades'] = {}
+        sesiones[chat_id]['paso_custodia'] = None
+        bot.edit_message_text(f"🧺 *{sesiones[chat_id].get('hotel','Hotel')}*\n\nOperación cancelada. Selecciona otra opción:", chat_id, call.message.message_id, reply_markup=menu_manual_operacion(key), parse_mode='Markdown')
+    else:
+        cmd_start(call.message)
+
+@bot.callback_query_handler(func=lambda call: call.data == 'ml_noop')
+def manual_noop(call):
+    bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mov_entregar_'))
 def manejar_opciones_entrega(call):
@@ -1869,7 +2491,10 @@ def recibir_firma_web_app(message):
                 "fecha": ahora_bog.strftime("%Y-%m-%d"),
                 "hora": ahora_bog.strftime("%I-%M-%p"),
                 "firma_base64": data_web.get("firma_b64"),
-                "recibido_por": ses.get("recibido_por_hotel", "Personal Hotel")
+                "recibido_por": ses.get("recibido_por_hotel", "Personal Hotel"),
+                "responsable_lavaarte": ses.get("resp_lavaarte", "Conductor Lavaarte"),
+                "fila_despacho": ses.get("despacho_pendiente", {}).get("fila", ""),
+                "total_prendas": ses.get("despacho_pendiente", {}).get("total_prendas", 0)
             }
             resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=45)
             
@@ -1911,7 +2536,10 @@ def _ejecutar_procesamiento_fotos_hilo(chat_id, imgs, cfg):
                 "fecha": ahora_bog.strftime("%Y-%m-%d"),
                 "hora": ahora_bog.strftime("%I-%M-%p"),
                 "firma_base64": b64_firma,
-                "recibido_por": cfg.get("recibido_por_hotel", "Personal Hotel")
+                "recibido_por": cfg.get("recibido_por_hotel", "Personal Hotel"),
+                "responsable_lavaarte": cfg.get("resp_lavaarte", "Conductor Lavaarte"),
+                "fila_despacho": cfg.get("despacho_pendiente", {}).get("fila", ""),
+                "total_prendas": cfg.get("despacho_pendiente", {}).get("total_prendas", 0)
             }
             resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, payload, timeout=45)
             
@@ -2234,6 +2862,71 @@ def procesar_texto_general(m):
     paso = ses.get("paso_custodia")
     modo = ses.get("modo")
     ahora_bog = obtener_ahora_bogota()
+
+    # OPERACIONES MANUALES DE LENCERÍA / MANTELERÍA
+    if paso == "MANUAL_RESP_HOTEL":
+        ses["resp_hotel"] = texto_ingresado
+        ses["paso_custodia"] = "MANUAL_RESP_LAVAARTE"
+        bot.reply_to(m, "✅ Responsable del hotel registrado.\n\nAhora escribe el nombre de quien recibe por Lavaarte:", parse_mode='Markdown')
+        return
+
+    if paso == "MANUAL_RESP_LAVAARTE":
+        ses["resp_lavaarte"] = texto_ingresado
+        ses["paso_custodia"] = None
+        ses["catalogo_items"] = obtener_catalogo_manual(chat_id, ses.get("key"))
+        ses["manual_cantidades"] = {}
+        texto_cat, markup_cat = _manual_menu_catalogo(chat_id, 0)
+        bot.send_message(chat_id, texto_cat, reply_markup=markup_cat, parse_mode='Markdown')
+        return
+
+    if paso == "MANUAL_CANTIDAD":
+        try:
+            cantidad = int(texto_ingresado.replace('.', '').replace(',', ''))
+            if cantidad < 0:
+                raise ValueError
+        except Exception:
+            bot.reply_to(m, "⚠️ Escribe únicamente una cantidad válida, por ejemplo: `100`.", parse_mode='Markdown')
+            return
+        idx = int(ses.get('manual_item_index', -1))
+        items = ses.get('catalogo_items', [])
+        if 0 <= idx < len(items):
+            ses.setdefault('manual_cantidades', {})[items[idx]] = cantidad
+        ses['paso_custodia'] = None
+        texto_cat, markup_cat = _manual_menu_catalogo(chat_id, ses.get('manual_page', 0))
+        bot.send_message(chat_id, texto_cat, reply_markup=markup_cat, parse_mode='Markdown')
+        return
+
+    if paso == "MANUAL_NUEVO_ITEM":
+        nombre_nuevo = texto_ingresado.strip()
+        if len(nombre_nuevo) < 2:
+            bot.reply_to(m, "⚠️ El nombre del artículo es demasiado corto.")
+            return
+        key = ses.get('key')
+        cfg_manual = ARBOL_SERVICIOS.get(key, {})
+        try:
+            resp_cat = ejecutar_post_apps_script(URL_APPS_SCRIPT, {
+                "accion": "AGREGAR_ITEM_CATALOGO",
+                "ruta": cfg_manual.get("ruta", "Oriente"),
+                "hotel": cfg_manual.get("hotel", ""),
+                "servicio": cfg_manual.get("servicio", ""),
+                "clave_catalogo": key,
+                "item": nombre_nuevo
+            }, timeout=30)
+            if resp_cat.get("status") != "SUCCESS":
+                raise ValueError(resp_cat.get("mensaje", "No fue posible guardar el artículo."))
+            bot.reply_to(m, f"✅ Artículo *{nombre_nuevo}* agregado al catálogo de {cfg_manual.get('hotel','Hotel')}.", parse_mode='Markdown')
+        except Exception as e:
+            bot.reply_to(m, "❌ No pude guardar el nuevo artículo en el catálogo: " + str(e))
+            return
+        if nombre_nuevo not in ses.setdefault('catalogo_items', []):
+            ses['catalogo_items'].append(nombre_nuevo)
+        ses['paso_custodia'] = None
+        if ses.get('manual_return_to') == 'MENU' and not ses.get('movimiento'):
+            bot.send_message(chat_id, f"🧺 *{cfg_manual.get('hotel','Hotel')}*\n\nArtículo agregado. Selecciona una operación:", reply_markup=menu_manual_operacion(key), parse_mode='Markdown')
+        else:
+            texto_cat, markup_cat = _manual_menu_catalogo(chat_id, len(ses['catalogo_items'])//MANUAL_CATALOGO_PAGE_SIZE)
+            bot.send_message(chat_id, texto_cat, reply_markup=markup_cat, parse_mode='Markdown')
+        return
     hotel_nom = ses.get("hotel", "Hotel")
     
     # AJUSTE DE PRENDAS DE DESPACHO EN SITIO
@@ -2464,7 +3157,7 @@ def procesar_texto_general(m):
                 txt_ok += "📝 *RESPALDO DE SEGURIDAD (FIRMA DIGITAL):*\n"
                 txt_ok += "Pídele a la persona que firme en la pantalla tocando el botón azul de abajo:"
                 
-                msg_sent = bot.send_message(chat_id, txt_ok, reply_markup=menu_firma_pantalla(hotel_nom), parse_mode='Markdown')
+                msg_sent = bot.send_message(chat_id, txt_ok, reply_markup=menu_firma_pantalla(hotel_nom, ses), parse_mode='Markdown')
                 ses["msg_firma_id"] = msg_sent.message_id
             else:
                 bot.reply_to(m, "⚠️ Error: " + str(resp.get("mensaje")))
