@@ -1002,6 +1002,21 @@ def extraer_fecha_formato(texto):
         return f"{int(dia):02d}/{int(mes):02d}/{anio}"
     return None
 
+
+def fecha_operacion_sesion(sesion, texto=None):
+    """Devuelve la fecha que debe usar la operación.
+    Prioridad: fecha escrita explícitamente en el mensaje > fecha programada en sesión > hoy.
+    """
+    if texto:
+        detectada = extraer_fecha_formato(texto)
+        if detectada:
+            return detectada
+    for clave in ("fecha_forzada", "fecha_operacion"):
+        val = sesion.get(clave)
+        if val and extraer_fecha_formato(str(val)):
+            return extraer_fecha_formato(str(val))
+    return obtener_ahora_bogota().strftime("%d/%m/%Y")
+
 def respaldar_lote_fotos_en_drive(imgs, hotel_nom, ruta_nom):
     """Genera un archivo consolidado con todas las fotos del lote y lo guarda en SOPORTE."""
     try:
@@ -1250,7 +1265,7 @@ def procesar_hilton_huespedes_manual(filas, fecha_hoy, correccion_usuario=None):
 
 def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None):
     ahora_bog = obtener_ahora_bogota()
-    fecha_hoy = ahora_bog.strftime("%d/%m/%Y")
+    fecha_hoy = fecha_operacion_sesion(config_sesion)
     
     if isinstance(contenido_multimodal, list):
         for elem in contenido_multimodal:
@@ -1785,7 +1800,7 @@ def _guardar_operacion_manual(chat_id):
     ses = sesiones.get(chat_id, {})
     cantidades = ses.get("manual_cantidades", {})
     filas = []
-    fecha = obtener_ahora_bogota().strftime("%d/%m/%Y")
+    fecha = fecha_operacion_sesion(ses)
     for prenda, cantidad in cantidades.items():
         cantidad = int(cantidad)
         if cantidad <= 0:
@@ -1805,7 +1820,13 @@ def _guardar_operacion_manual(chat_id):
 
     cfg = ses
     hora = obtener_ahora_bogota().strftime("%I:%M %p")
-    dia = cfg.get("dia_despacho_corrido") if cfg.get("movimiento") == "ENTREGA" and cfg.get("dia_despacho_corrido") else obtener_ahora_bogota().day
+    if cfg.get("movimiento") == "ENTREGA" and cfg.get("dia_despacho_corrido"):
+        dia = cfg.get("dia_despacho_corrido")
+    else:
+        try:
+            dia = int(fecha.split('/')[0])
+        except Exception:
+            dia = obtener_ahora_bogota().day
     token = f"{cfg.get('hotel','HOTEL')}_{dia}_MANUAL_{str(uuid.uuid4())[:10]}"
     payload = {
         "accion": "GUARDAR",
@@ -2762,6 +2783,22 @@ def confirmar_guardado(m):
             bot.reply_to(m, "❌ Error registrando financiero: " + str(e))
         return
 
+    # 1B. PROGRAMAR / CAMBIAR FECHA DE OPERACIÓN ANTES DE RECIBIR LAS FOTOS
+    # Ejemplo: "fecha 10/10/2026". La fecha queda fijada para toda la sesión
+    # hasta que el usuario indique otra fecha o cambie de operación.
+    fecha_programada = extraer_fecha_formato(texto_ingresado)
+    if fecha_programada and not ses.get("filas"):
+        ses["fecha_forzada"] = fecha_programada
+        ses["fecha_operacion"] = fecha_programada
+        bot.reply_to(
+            m,
+            f"📅 *Fecha de operación fijada: {fecha_programada}*\n\n"
+            "Todo lo que registres a continuación se guardará en ese día, aunque hoy sea otra fecha.\n"
+            "Puedes cambiarla escribiendo otra fecha, por ejemplo: *fecha 11/10/2026*.",
+            parse_mode='Markdown'
+        )
+        return
+
     # 2. CONFIRMAR PRENDAS OPERATIVAS (CON CLAVE DE TRANSACCIÓN ÚNICA)
     if ses.get("filas"):
         cfg = ses
@@ -2776,6 +2813,11 @@ def confirmar_guardado(m):
             if filas and filas[0].get('fecha'):
                 try:
                     dia_actual = int(filas[0]['fecha'].split('/')[0])
+                except Exception:
+                    pass
+            elif cfg.get("fecha_forzada"):
+                try:
+                    dia_actual = int(str(cfg["fecha_forzada"]).split('/')[0])
                 except Exception:
                     pass
 
@@ -3181,6 +3223,8 @@ def procesar_texto_general(m):
     if ses.get("filas"):
         fecha_detectada = extraer_fecha_formato(texto_ingresado)
         if fecha_detectada:
+            ses["fecha_forzada"] = fecha_detectada
+            ses["fecha_operacion"] = fecha_detectada
             for f in ses["filas"]:
                 f["fecha"] = fecha_detectada
             resumen_txt = f"📅 *Fecha actualizada a {fecha_detectada}:*\n\n" + generar_resumen(ses["filas"], ses)
