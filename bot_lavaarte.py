@@ -154,6 +154,8 @@ sesiones = {}
 cola_fotos = {}
 timers = {}
 lock = threading.Lock()
+CATALOGO_CACHE = {}
+CATALOGO_CACHE_TTL = 300
 
 # -------------------------------------------------------------------------
 # SERVIDOR WEB FLASK PARA MANTENER ACTIVO EL SERVICIO EN RENDER (24/7)
@@ -177,17 +179,7 @@ def obtener_ahora_bogota():
         return utc_now - datetime.timedelta(hours=5)
 
 def calcular_dia_corrido_logistica():
-    """
-    Calcula el día hábil anterior para despacho de lencería:
-    - Si es lunes (weekday 0), retrocede al sábado (2 días antes).
-    - Para cualquier otro día, retrocede 1 día.
-    """
-    ahora = obtener_ahora_bogota()
-    if ahora.weekday() == 0:  # Lunes
-        dia_logistico = ahora - datetime.timedelta(days=2)
-    else:
-        dia_logistico = ahora - datetime.timedelta(days=1)
-    return dia_logistico.day
+    return calcular_fecha_corrido_logistica().day
 
 def ejecutar_post_apps_script(url, payload, timeout=85):
     """Ejecución tolerante a redirecciones de Apps Script.
@@ -991,31 +983,35 @@ def a_entero(val):
     except Exception:
         return 1
 
+MESES_ES = {"enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,"julio":7,"agosto":8,"septiembre":9,"setiembre":9,"octubre":10,"noviembre":11,"diciembre":12}
+
 def extraer_fecha_formato(texto):
-    if not texto:
-        return None
-    m = re.search(r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b', texto.strip())
+    if not texto: return None
+    txt=str(texto).strip().lower()
+    m=re.search(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b",txt)
     if m:
-        dia, mes, anio = m.groups()
-        if len(anio) == 2:
-            anio = "20" + anio
-        return f"{int(dia):02d}/{int(mes):02d}/{anio}"
+        dia,mes,anio=m.groups(); anio=anio or str(obtener_ahora_bogota().year)
+        if len(anio)==2: anio="20"+anio
+        try: return datetime.datetime(int(anio),int(mes),int(dia)).strftime("%d/%m/%Y")
+        except Exception: return None
+    m=re.search(r"\b(\d{1,2})\s*(?:de\s+)?([a-záéíóúñ]+)(?:\s+de\s+|\s+)(\d{4})?\b",txt)
+    if m:
+        dia,mes_txt,anio=m.groups(); mes=MESES_ES.get(mes_txt)
+        if mes:
+            anio=anio or str(obtener_ahora_bogota().year)
+            try: return datetime.datetime(int(anio),mes,int(dia)).strftime("%d/%m/%Y")
+            except Exception: return None
     return None
 
+def fecha_operacion_a_dia(fecha_str,fallback=None):
+    if fecha_str:
+        try: return int(str(fecha_str).split('/')[0])
+        except Exception: pass
+    return fallback if fallback is not None else obtener_ahora_bogota().day
 
-def fecha_operacion_sesion(sesion, texto=None):
-    """Devuelve la fecha que debe usar la operación.
-    Prioridad: fecha escrita explícitamente en el mensaje > fecha programada en sesión > hoy.
-    """
-    if texto:
-        detectada = extraer_fecha_formato(texto)
-        if detectada:
-            return detectada
-    for clave in ("fecha_forzada", "fecha_operacion"):
-        val = sesion.get(clave)
-        if val and extraer_fecha_formato(str(val)):
-            return extraer_fecha_formato(str(val))
-    return obtener_ahora_bogota().strftime("%d/%m/%Y")
+def calcular_fecha_corrido_logistica():
+    ahora=obtener_ahora_bogota()
+    return ahora-datetime.timedelta(days=2 if ahora.weekday()==0 else 1)
 
 def respaldar_lote_fotos_en_drive(imgs, hotel_nom, ruta_nom):
     """Genera un archivo consolidado con todas las fotos del lote y lo guarda en SOPORTE."""
@@ -1265,7 +1261,7 @@ def procesar_hilton_huespedes_manual(filas, fecha_hoy, correccion_usuario=None):
 
 def analizar_con_ia(contenido_multimodal, config_sesion, correccion_usuario=None):
     ahora_bog = obtener_ahora_bogota()
-    fecha_hoy = fecha_operacion_sesion(config_sesion)
+    fecha_hoy = ahora_bog.strftime("%d/%m/%Y")
     
     if isinstance(contenido_multimodal, list):
         for elem in contenido_multimodal:
@@ -1691,28 +1687,35 @@ def _catalogo_nombre_servicio(key):
     cfg = ARBOL_SERVICIOS.get(key, {})
     return str(cfg.get("servicio", "Lencería"))
 
-def obtener_catalogo_manual(chat_id, key):
-    """Carga catálogo base + artículos persistidos en Google Sheets."""
-    ses = sesiones.setdefault(chat_id, {})
-    base = list(CATALOGOS_MANUALES_BASE.get(key, []))
+def obtener_catalogo_manual(chat_id,key,forzar=False):
+    ses=sesiones.setdefault(chat_id,{})
+    base=list(CATALOGOS_MANUALES_BASE.get(key,[])); now=time.time(); cache=CATALOGO_CACHE.get(key)
+    if cache and not forzar and now-cache.get("ts",0)<CATALOGO_CACHE_TTL:
+        ses["catalogo_items"]=list(cache["items"]); return list(cache["items"])
+    if not forzar:
+        items=list(cache.get("items",base)) if cache else base
+        ses["catalogo_items"]=items
+        threading.Thread(target=refrescar_catalogo_manual,args=[key],daemon=True).start()
+        return items
     try:
-        cfg = ARBOL_SERVICIOS.get(key, {})
-        resp = ejecutar_post_apps_script(URL_APPS_SCRIPT, {
-            "accion": "OBTENER_CATALOGO",
-            "ruta": cfg.get("ruta", "Oriente"),
-            "hotel": cfg.get("hotel", ""),
-            "servicio": cfg.get("servicio", ""),
-            "clave_catalogo": key
-        }, timeout=30)
-        if resp.get("status") == "SUCCESS":
-            for item in resp.get("items", []):
-                nombre = str(item.get("item", "")).strip()
-                if nombre and nombre not in base:
-                    base.append(nombre)
-    except Exception as e:
-        print(f"[CATALOGO] Usando catálogo base para {key}: {e}")
-    ses["catalogo_items"] = base
-    return base
+        cfg=ARBOL_SERVICIOS.get(key,{})
+        resp=ejecutar_post_apps_script(URL_APPS_SCRIPT,{"accion":"OBTENER_CATALOGO","ruta":cfg.get("ruta","Oriente"),"hotel":cfg.get("hotel",""),"servicio":cfg.get("servicio",""),"clave_catalogo":key},timeout=20)
+        if resp.get("status")=="SUCCESS":
+            items=list(base)
+            for item in resp.get("items",[]):
+                nombre=str(item.get("item","")).strip()
+                if nombre and nombre not in items: items.append(nombre)
+            CATALOGO_CACHE[key]={"ts":time.time(),"items":items}
+            if chat_id in sesiones: sesiones[chat_id]["catalogo_items"]=list(items)
+            return items
+    except Exception as e: print(f"[CATALOGO] Usando catálogo base para {key}: {e}")
+    CATALOGO_CACHE[key]={"ts":time.time(),"items":list(base)}
+    if chat_id in sesiones: sesiones[chat_id]["catalogo_items"]=list(base)
+    return list(base)
+
+def refrescar_catalogo_manual(key):
+    try: obtener_catalogo_manual(-999999,key,forzar=True)
+    except Exception as e: print(f"[CATALOGO] Refresco en segundo plano falló para {key}: {e}")
 
 def _manual_resumen(chat_id):
     ses = sesiones.get(chat_id, {})
@@ -1751,6 +1754,7 @@ def _manual_menu_catalogo(chat_id, page=0):
         markup.row(*nav)
 
     markup.add(InlineKeyboardButton("🧾 Ver resumen", callback_data="ml_summary"))
+    markup.add(InlineKeyboardButton("📅 Cambiar fecha", callback_data="ml_fecha"))
     markup.add(InlineKeyboardButton("➕ Agregar artículo", callback_data="ml_new"))
     markup.add(InlineKeyboardButton("❌ Cancelar", callback_data="ml_cancel"))
 
@@ -1785,6 +1789,7 @@ def menu_manual_operacion(key):
         InlineKeyboardButton("📤 Despachar en planta", callback_data="ml_start|DESPACHAR")
     )
     markup.add(InlineKeyboardButton("🤝 Entregar en hotel", callback_data="ml_entrega_hotel"))
+    markup.add(InlineKeyboardButton("📅 Cambiar fecha de operación", callback_data="ml_fecha"))
     markup.add(InlineKeyboardButton("📋 Ver catálogo", callback_data="ml_viewcat"))
     markup.add(InlineKeyboardButton("➕ Agregar artículo", callback_data="ml_new"))
     markup.add(InlineKeyboardButton("⬅️ Cambiar hotel", callback_data="ruta_" + str(cfg.get("ruta", "Oriente")).lower()))
@@ -1800,7 +1805,7 @@ def _guardar_operacion_manual(chat_id):
     ses = sesiones.get(chat_id, {})
     cantidades = ses.get("manual_cantidades", {})
     filas = []
-    fecha = fecha_operacion_sesion(ses)
+    fecha = ses.get("fecha_operacion") or obtener_ahora_bogota().strftime("%d/%m/%Y")
     for prenda, cantidad in cantidades.items():
         cantidad = int(cantidad)
         if cantidad <= 0:
@@ -1820,13 +1825,7 @@ def _guardar_operacion_manual(chat_id):
 
     cfg = ses
     hora = obtener_ahora_bogota().strftime("%I:%M %p")
-    if cfg.get("movimiento") == "ENTREGA" and cfg.get("dia_despacho_corrido"):
-        dia = cfg.get("dia_despacho_corrido")
-    else:
-        try:
-            dia = int(fecha.split('/')[0])
-        except Exception:
-            dia = obtener_ahora_bogota().day
+    dia = fecha_operacion_a_dia(fecha, cfg.get("dia_despacho_corrido") if cfg.get("movimiento") == "ENTREGA" else None)
     token = f"{cfg.get('hotel','HOTEL')}_{dia}_MANUAL_{str(uuid.uuid4())[:10]}"
     payload = {
         "accion": "GUARDAR",
@@ -1894,7 +1893,8 @@ def menu_firma_pantalla(hotel_nom, ses=None):
         "fila_despacho": str(ses.get("despacho_pendiente", {}).get("fila", "")),
         "total_prendas": str(ses.get("despacho_pendiente", {}).get("total_prendas", 0)),
         "responsable_lavaarte": str(ses.get("resp_lavaarte", ses.get("despacho_pendiente", {}).get("despachado_por", "Conductor Lavaarte"))),
-        "recibido_por": str(ses.get("recibido_por_hotel", "Personal Hotel"))
+        "recibido_por": str(ses.get("recibido_por_hotel", "Personal Hotel")),
+        "fecha_entrega": str(ses.get("fecha_entrega", obtener_ahora_bogota().strftime("%d/%m/%Y")))
     }
     query = "&".join(f"{requests.utils.quote(str(k))}={requests.utils.quote(str(v))}" for k, v in params.items())
     url_pantalla = f"{URL_APPS_SCRIPT}?{query}"
@@ -1972,6 +1972,7 @@ def menu_sub_entrega(hotel_key):
     markup.add(
         InlineKeyboardButton("📦 1. Cargar Despacho (En Planta)", callback_data="despacho_planta_" + str(hotel_key)),
         InlineKeyboardButton("🤝 2. Confirmar Entrega en Hotel (Conductor)", callback_data="confirmar_hotel_" + str(hotel_key)),
+        InlineKeyboardButton("📅 Cambiar fecha de entrega", callback_data="fecha_entrega|" + str(hotel_key)),
         InlineKeyboardButton("⬅️ Volver", callback_data="sel_" + str(hotel_key))
     )
     return markup
@@ -2156,6 +2157,8 @@ def seleccionar_hotel(call):
     sesiones[chat_id] = dict(cfg)
     sesiones[chat_id]["key"] = key
     sesiones[chat_id]["filas"] = []
+    sesiones[chat_id]["fecha_operacion"] = obtener_ahora_bogota().strftime("%d/%m/%Y")
+    sesiones[chat_id]["fecha_entrega"] = obtener_ahora_bogota().strftime("%d/%m/%Y")
     
     if key in MANUAL_CATALOGO_KEYS:
         sesiones[chat_id]["catalogo_items"] = obtener_catalogo_manual(chat_id, key)
@@ -2183,9 +2186,12 @@ def iniciar_operacion_manual(call):
     movimiento = call.data.split('|',1)[1]
     ses["movimiento"] = "RECEPCIÓN" if movimiento == "RECIBIR" else "ENTREGA"
     if movimiento == "DESPACHAR":
-        ses["dia_despacho_corrido"] = calcular_dia_corrido_logistica()
+        fecha_defecto = calcular_fecha_corrido_logistica().strftime("%d/%m/%Y")
+        ses["dia_despacho_corrido"] = fecha_operacion_a_dia(fecha_defecto)
     else:
+        fecha_defecto = obtener_ahora_bogota().strftime("%d/%m/%Y")
         ses.pop("dia_despacho_corrido", None)
+    ses["fecha_operacion"] = fecha_defecto
     ses["manual_cantidades"] = {}
     ses["paso_custodia"] = "MANUAL_RESP_HOTEL" if movimiento == "RECIBIR" else "MANUAL_RESP_LAVAARTE"
     if movimiento == "RECIBIR":
@@ -2193,6 +2199,13 @@ def iniciar_operacion_manual(call):
     else:
         texto = f"📤 *DESPACHO EN PLANTA — {ses.get('hotel','Hotel')}*\n\n¿Quién despacha la ropa por parte de Lavaarte? (Nombre del conductor/responsable):"
     bot.edit_message_text(texto, chat_id, call.message.message_id, parse_mode='Markdown')
+
+@bot.callback_query_handler(func=lambda call: call.data == 'ml_fecha')
+def manual_fecha_callback(call):
+    chat_id=call.message.chat.id; bot.answer_callback_query(call.id)
+    sesiones.setdefault(chat_id,{})['paso_custodia']='MANUAL_FECHA'
+    actual=sesiones[chat_id].get('fecha_operacion',obtener_ahora_bogota().strftime('%d/%m/%Y'))
+    bot.send_message(chat_id,f"📅 *Fecha actual:* `{actual}`\n\nEscribe la nueva fecha (ejemplo: `01/10/2026` o `1 de octubre`).",parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data == 'ml_viewcat')
 def ver_catalogo_manual(call):
@@ -2306,6 +2319,14 @@ def manual_cancelar_callback(call):
 def manual_noop(call):
     bot.answer_callback_query(call.id)
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('fecha_entrega|'))
+def cambiar_fecha_entrega_callback(call):
+    chat_id=call.message.chat.id; bot.answer_callback_query(call.id)
+    key=call.data.split('|',1)[1]; cfg=ARBOL_SERVICIOS.get(key,{})
+    ses=sesiones.setdefault(chat_id,dict(cfg)); ses['key']=key; ses['paso_custodia']='FECHA_ENTREGA'
+    actual=ses.get('fecha_entrega',obtener_ahora_bogota().strftime('%d/%m/%Y'))
+    bot.send_message(chat_id,f"📅 *Fecha de entrega actual:* `{actual}`\n\nEscribe la fecha que realmente corresponde (ejemplo: `01/10/2026` o `1 de octubre`).",parse_mode='Markdown')
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mov_entregar_'))
 def manejar_opciones_entrega(call):
     chat_id = call.message.chat.id
@@ -2315,6 +2336,7 @@ def manejar_opciones_entrega(call):
     sesiones[chat_id] = dict(cfg)
     sesiones[chat_id]["key"] = key
     sesiones[chat_id]["movimiento"] = "ENTREGA"
+    sesiones[chat_id]["fecha_entrega"] = obtener_ahora_bogota().strftime("%d/%m/%Y")
     
     bot.edit_message_text(
         "📤 *ENTREGA DE ROPA - " + str(cfg['hotel']) + "*\n\nSelecciona el momento de la entrega:",
@@ -2509,7 +2531,7 @@ def recibir_firma_web_app(message):
                 "accion": "GUARDAR_FIRMA_ENTREGA",
                 "hotel": hotel_activo,
                 "ruta": ses.get("ruta", "Oriente"),
-                "fecha": ahora_bog.strftime("%Y-%m-%d"),
+                "fecha": ses.get("fecha_entrega", ahora_bog.strftime("%d/%m/%Y")),
                 "hora": ahora_bog.strftime("%I-%M-%p"),
                 "firma_base64": data_web.get("firma_b64"),
                 "recibido_por": ses.get("recibido_por_hotel", "Personal Hotel"),
@@ -2783,22 +2805,6 @@ def confirmar_guardado(m):
             bot.reply_to(m, "❌ Error registrando financiero: " + str(e))
         return
 
-    # 1B. PROGRAMAR / CAMBIAR FECHA DE OPERACIÓN ANTES DE RECIBIR LAS FOTOS
-    # Ejemplo: "fecha 10/10/2026". La fecha queda fijada para toda la sesión
-    # hasta que el usuario indique otra fecha o cambie de operación.
-    fecha_programada = extraer_fecha_formato(texto_ingresado)
-    if fecha_programada and not ses.get("filas"):
-        ses["fecha_forzada"] = fecha_programada
-        ses["fecha_operacion"] = fecha_programada
-        bot.reply_to(
-            m,
-            f"📅 *Fecha de operación fijada: {fecha_programada}*\n\n"
-            "Todo lo que registres a continuación se guardará en ese día, aunque hoy sea otra fecha.\n"
-            "Puedes cambiarla escribiendo otra fecha, por ejemplo: *fecha 11/10/2026*.",
-            parse_mode='Markdown'
-        )
-        return
-
     # 2. CONFIRMAR PRENDAS OPERATIVAS (CON CLAVE DE TRANSACCIÓN ÚNICA)
     if ses.get("filas"):
         cfg = ses
@@ -2806,20 +2812,14 @@ def confirmar_guardado(m):
         tipo_op = filas[0].get("tipo_operacion_detectada", cfg.get("tipo", "HUESPEDES"))
         hora_bogota = ahora_bog.strftime("%I:%M %p")
         
-        if cfg.get("movimiento") == "ENTREGA" and cfg.get("dia_despacho_corrido"):
+        if filas and filas[0].get('fecha'):
+            dia_actual = fecha_operacion_a_dia(filas[0].get('fecha'))
+        elif cfg.get("fecha_operacion"):
+            dia_actual = fecha_operacion_a_dia(cfg.get("fecha_operacion"))
+        elif cfg.get("movimiento") == "ENTREGA" and cfg.get("dia_despacho_corrido"):
             dia_actual = cfg.get("dia_despacho_corrido")
         else:
             dia_actual = ahora_bog.day
-            if filas and filas[0].get('fecha'):
-                try:
-                    dia_actual = int(filas[0]['fecha'].split('/')[0])
-                except Exception:
-                    pass
-            elif cfg.get("fecha_forzada"):
-                try:
-                    dia_actual = int(str(cfg["fecha_forzada"]).split('/')[0])
-                except Exception:
-                    pass
 
         token_transaccion = f"{cfg.get('hotel')}_{dia_actual}_{len(filas)}_{str(uuid.uuid4())[:8]}"
 
@@ -2904,6 +2904,26 @@ def procesar_texto_general(m):
     paso = ses.get("paso_custodia")
     modo = ses.get("modo")
     ahora_bog = obtener_ahora_bogota()
+
+    fecha_ingresada = extraer_fecha_formato(texto_ingresado)
+    if fecha_ingresada and ses.get("hotel") and modo not in ("CONSULTA", "CORREGIR_REGISTRO_BD") and ses.get("modulo") != "FINANCIERO":
+        if paso == "FECHA_ENTREGA" or ses.get("movimiento") == "ENTREGA":
+            ses["fecha_entrega"] = fecha_ingresada
+            ses["fecha_operacion"] = fecha_ingresada
+            ses["dia_entrega"] = fecha_operacion_a_dia(fecha_ingresada)
+            ses["dia_despacho_corrido"] = fecha_operacion_a_dia(fecha_ingresada)
+            if ses.get("filas"):
+                for f in ses["filas"]: f["fecha"] = fecha_ingresada
+            ses["paso_custodia"] = None if paso == "FECHA_ENTREGA" else paso
+            bot.reply_to(m,f"✅ *Fecha de entrega actualizada:* `{fecha_ingresada}`\n\nLa entrega quedará registrada en esa fecha.",parse_mode='Markdown')
+            return
+        ses["fecha_operacion"] = fecha_ingresada
+        if ses.get("filas"):
+            for f in ses["filas"]: f["fecha"] = fecha_ingresada
+        ses["dia_despacho_corrido"] = fecha_operacion_a_dia(fecha_ingresada)
+        if paso == "MANUAL_FECHA": ses["paso_custodia"] = None
+        bot.reply_to(m,f"✅ *Fecha de operación actualizada:* `{fecha_ingresada}`",parse_mode='Markdown')
+        return
 
     # OPERACIONES MANUALES DE LENCERÍA / MANTELERÍA
     if paso == "MANUAL_RESP_HOTEL":
@@ -3174,11 +3194,13 @@ def procesar_texto_general(m):
             else:
                 detalle_notas = f"Entregado a {quien_recibe}. {detalle_notas}"
 
+            fecha_entrega = ses.get("fecha_entrega") or ahora_bog.strftime("%d/%m/%Y")
             payload = {
                 "accion": "CONFIRMAR_ENTREGA_HOTEL",
                 "ruta": ses.get("ruta", "Oriente"),
                 "hotel": hotel_nom,
                 "fila_despacho": desp.get("fila"),
+                "fecha_entrega": fecha_entrega,
                 "total_prendas": desp.get("total_prendas", 0),
                 "responsable_lavaarte": ses.get("resp_lavaarte", desp.get("despachado_por", "Conductor")),
                 "responsable_hotel": quien_recibe,
@@ -3223,8 +3245,6 @@ def procesar_texto_general(m):
     if ses.get("filas"):
         fecha_detectada = extraer_fecha_formato(texto_ingresado)
         if fecha_detectada:
-            ses["fecha_forzada"] = fecha_detectada
-            ses["fecha_operacion"] = fecha_detectada
             for f in ses["filas"]:
                 f["fecha"] = fecha_detectada
             resumen_txt = f"📅 *Fecha actualizada a {fecha_detectada}:*\n\n" + generar_resumen(ses["filas"], ses)
