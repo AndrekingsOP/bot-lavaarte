@@ -1761,7 +1761,9 @@ def _manual_menu_catalogo(chat_id, page=0):
     movimiento = "RECEPCIÓN" if ses.get("movimiento") == "RECEPCIÓN" else "DESPACHO EN PLANTA"
     texto = f"🧺 *{movimiento} — {ses.get('hotel', 'Hotel')}*\n"
     texto += f"Servicio: *{ses.get('servicio', 'Lencería')}*\n\n"
-    texto += "Selecciona un artículo. Al abrirlo podrás sumar +1, +5, +10, +25, +50 o escribir una cantidad.\n\n"
+    texto += "Selecciona un artículo. Al abrirlo podrás sumar +1, +5, +10, +25, +50 o escribir una cantidad.\n"
+    fecha_resumen = ses.get("fecha_operacion") or obtener_ahora_bogota().strftime("%d/%m/%Y")
+    texto += f"\n📅 *FECHA DEL REGISTRO:* `{fecha_resumen}`\n\n"
     texto += _manual_resumen(chat_id)
     return texto, markup
 
@@ -1837,6 +1839,8 @@ def _guardar_operacion_manual(chat_id):
         "responsable_lavaarte": cfg.get("resp_lavaarte", "Conductor Lavaarte"),
         "responsable_hotel": cfg.get("resp_hotel", "Recepción / Ama de llaves"),
         "hora_sellada": hora,
+        "fecha_operacion": fecha,
+        "fecha_manual_numerica": True,
         "dia": dia,
         "filas": filas,
         "id_transaccion": token
@@ -1849,7 +1853,7 @@ def _guardar_operacion_manual(chat_id):
             total = sum(x["cantidad"] for x in filas)
             sesiones[chat_id]["manual_cantidades"] = {}
             sesiones[chat_id]["filas"] = []
-            bot.send_message(chat_id, f"✅ *OPERACIÓN GUARDADA*\n\n🏨 {cfg.get('hotel')} — {cfg.get('servicio')}\n📦 Movimiento: *{payload['movimiento']}*\n📊 Total: *{total}*\n📅 Día: *{dia}*\n📋 Hoja: `{hoja}`", parse_mode='Markdown', reply_markup=menu_post_guardado())
+            bot.send_message(chat_id, f"✅ *OPERACIÓN GUARDADA*\n\n🏨 {cfg.get('hotel')} — {cfg.get('servicio')}\n📦 Movimiento: *{payload['movimiento']}*\n📊 Total: *{total}*\n📅 Fecha: `{fecha}` (día {dia})\n📋 Hoja: `{hoja}`", parse_mode='Markdown', reply_markup=menu_post_guardado())
         else:
             bot.send_message(chat_id, "⚠️ Google Sheets no confirmó el guardado: " + str(resp.get("mensaje", "respuesta desconocida")))
     except Exception as e:
@@ -2185,7 +2189,11 @@ def iniciar_operacion_manual(call):
     ses = sesiones.get(chat_id, {})
     movimiento = call.data.split('|',1)[1]
     ses["movimiento"] = "RECEPCIÓN" if movimiento == "RECIBIR" else "ENTREGA"
-    if movimiento == "DESPACHAR":
+    if ses.get("fecha_manual_dia") and ses.get("fecha_operacion"):
+        # Si el usuario eligió el día desde el menú antes de iniciar, conservarlo.
+        fecha_defecto = ses["fecha_operacion"]
+        ses["dia_despacho_corrido"] = fecha_operacion_a_dia(fecha_defecto)
+    elif movimiento == "DESPACHAR":
         fecha_defecto = calcular_fecha_corrido_logistica().strftime("%d/%m/%Y")
         ses["dia_despacho_corrido"] = fecha_operacion_a_dia(fecha_defecto)
     else:
@@ -2202,10 +2210,20 @@ def iniciar_operacion_manual(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == 'ml_fecha')
 def manual_fecha_callback(call):
-    chat_id=call.message.chat.id; bot.answer_callback_query(call.id)
-    sesiones.setdefault(chat_id,{})['paso_custodia']='MANUAL_FECHA'
-    actual=sesiones[chat_id].get('fecha_operacion',obtener_ahora_bogota().strftime('%d/%m/%Y'))
-    bot.send_message(chat_id,f"📅 *Fecha actual:* `{actual}`\n\nEscribe la nueva fecha (ejemplo: `01/10/2026` o `1 de octubre`).",parse_mode='Markdown')
+    chat_id = call.message.chat.id
+    bot.answer_callback_query(call.id)
+    ses = sesiones.setdefault(chat_id, {})
+    ses['paso_custodia'] = 'MANUAL_FECHA'
+    actual = ses.get('fecha_operacion', obtener_ahora_bogota().strftime('%d/%m/%Y'))
+    ahora = obtener_ahora_bogota()
+    bot.send_message(
+        chat_id,
+        f"📅 *Fecha actual:* `{actual}`\n\n"
+        f"Escribe únicamente el número del día, del 1 al 31.\n"
+        f"Ejemplo: `4` significa el día 4 del mes actual ({ahora.strftime('%m/%Y')}).\n"
+        "No escribas el nombre del mes ni prendas; este cambio no usa IA.",
+        parse_mode='Markdown'
+    )
 
 @bot.callback_query_handler(func=lambda call: call.data == 'ml_viewcat')
 def ver_catalogo_manual(call):
@@ -2904,6 +2922,36 @@ def procesar_texto_general(m):
     paso = ses.get("paso_custodia")
     modo = ses.get("modo")
     ahora_bog = obtener_ahora_bogota()
+
+    # FECHA MANUAL DE LENCERÍA/MANTELERÍA: acepta solo el número del día,
+    # sin Gemini ni análisis de texto. El mes y año son los actuales en Bogotá.
+    if paso == "MANUAL_FECHA" and ses.get("key") in MANUAL_CATALOGO_KEYS:
+        if not re.fullmatch(r"\d{1,2}", texto_ingresado):
+            bot.reply_to(m, "⚠️ Escribe únicamente un número del 1 al 31. Ejemplo: `4`.", parse_mode='Markdown')
+            return
+        dia_elegido = int(texto_ingresado)
+        try:
+            fecha_obj_elegida = datetime.date(ahora_bog.year, ahora_bog.month, dia_elegido)
+        except ValueError:
+            ultimo_dia_mes = (datetime.date(ahora_bog.year + (ahora_bog.month == 12), (ahora_bog.month % 12) + 1, 1) - datetime.timedelta(days=1)).day
+            bot.reply_to(m, f"⚠️ Este mes solo tiene {ultimo_dia_mes} días. Escribe un día válido entre 1 y {ultimo_dia_mes}.")
+            return
+        fecha_elegida = fecha_obj_elegida.strftime("%d/%m/%Y")
+        ses["fecha_operacion"] = fecha_elegida
+        ses["fecha_entrega"] = fecha_elegida
+        ses["fecha_manual_dia"] = True
+        ses["dia_despacho_corrido"] = dia_elegido
+        if ses.get("filas"):
+            for fila_fecha in ses["filas"]:
+                fila_fecha["fecha"] = fecha_elegida
+        ses["paso_custodia"] = None
+        bot.reply_to(m, f"✅ *Fecha actualizada:* `{fecha_elegida}`\n\nEl registro se guardará en las columnas del día *{dia_elegido}* (R/E/P según corresponda). No se procesó con IA.", parse_mode='Markdown')
+        if ses.get("movimiento") in ("RECEPCIÓN", "ENTREGA"):
+            texto_cat, markup_cat = _manual_menu_catalogo(chat_id, ses.get("manual_page", 0))
+            bot.send_message(chat_id, texto_cat, reply_markup=markup_cat, parse_mode='Markdown')
+        else:
+            bot.send_message(chat_id, "Puedes continuar con la operación cuando estés listo.", reply_markup=menu_manual_operacion(ses.get("key")))
+        return
 
     fecha_ingresada = extraer_fecha_formato(texto_ingresado)
     if fecha_ingresada and ses.get("hotel") and modo not in ("CONSULTA", "CORREGIR_REGISTRO_BD") and ses.get("modulo") != "FINANCIERO":
